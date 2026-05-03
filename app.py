@@ -1,58 +1,59 @@
 """
-North East & Yorkshire Grid Digital Twin — IMD + Financial Loss + BBC-style Hazard Animation
-==========================================================================================
+SAT-Guard / North East & Yorkshire Grid Digital Twin
+Streamlit single-file version
+====================================================
 
-This is a single-file Flask application.
+This version removes Flask routes and converts the application into a deployable
+Streamlit dashboard.
 
-Main upgrades:
-- Uses IoD2025 / deprivation Excel files for social vulnerability when available.
-- Keeps robust fallback vulnerability values if the Excel schema cannot be matched.
-- Adds financial loss model:
-    * Energy Not Supplied (MW and MWh)
-    * Value of Lost Load (VoLL)
-    * Customer interruption loss
-    * Business disruption loss
-    * Critical-service/social-vulnerability uplift
-    * Restoration and repair cost
-- Adds BBC-weather-inspired hazard simulation:
-    * Working Leaflet map
-    * Canvas overlay with moving wind streaks
-    * Rain particles for flood/storm scenarios
-    * Pulsing hazard glow cells
-    * Play / pause / scrub controls
-- Keeps Northern Powergrid outage layer, postcode popups, NASA GIBS overlays,
-  resilience model, renewable/grid failure model, and Monte Carlo uncertainty.
+Main features:
+- Region and scenario controls
+- Open-Meteo weather and air-quality ingestion with cache
+- Northern Powergrid outage ingestion with fallback points
+- IoD2025 / deprivation Excel loader with fallback proxies
+- Multi-layer risk, resilience, financial loss and Monte Carlo model
+- Postcode resilience and investment recommendations
+- Streamlit maps, charts, tables and CSV exports
 
-Run:
-    pip install flask pandas numpy requests openpyxl
-    python app.py
+Run locally:
+    pip install streamlit pandas numpy requests openpyxl pydeck
+    streamlit run streamlit_app.py
 
-Open:
-    http://localhost:5000
+Streamlit Cloud:
+    Main file path: streamlit_app.py
 
-For IMD / deprivation:
-    Put the IoD2025 Excel files in the same folder as app.py, for example:
-    - File_1_IoD2025 Index of Multiple Deprivation.xlsx
-    - File_2_IoD2025 Domains of Deprivation.xlsx
-    - File_3_IoD2025 Supplementary Indices_IDACI and IDAOPI.xlsx
-    - IoD2025 Local Authority District Summaries (lower-tier) - Rank of average rank.xlsx
+Recommended requirements.txt:
+    streamlit
+    pandas
+    numpy
+    requests
+    openpyxl
+    pydeck
 """
 
-import json
 import math
 import random
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
 import requests
-from flask import Flask, Response, jsonify, render_template_string, request
+import streamlit as st
 
 
-app = Flask(__name__)
+# =============================================================================
+# STREAMLIT CONFIG
+# =============================================================================
+
+st.set_page_config(
+    page_title="SAT-Guard Grid Digital Twin",
+    page_icon="⚡",
+    layout="wide",
+)
+
 
 # =============================================================================
 # CONFIGURATION
@@ -318,22 +319,6 @@ REGIONS = {
     },
 }
 
-DATA_CACHE = {
-    "key": None,
-    "timestamp": None,
-    "places": None,
-    "outages": None,
-    "grid": None,
-}
-
-IMD_CACHE = {
-    "loaded": False,
-    "summary": None,
-    "source": None,
-}
-
-CACHE_SECONDS = 240
-
 
 # =============================================================================
 # BASIC HELPERS
@@ -404,19 +389,14 @@ def get_nasa_tile_url(layer_name: str, date_string: str = None) -> str:
     if layer_name not in NASA_LAYERS:
         layer_name = "VIIRS NOAA-20 True Colour"
     if date_string is None:
-        date_string = (datetime.utcnow() - timedelta(days=3)).strftime("%Y-%m-%d")
+        date_string = (datetime.now(UTC) - timedelta(days=3)).strftime("%Y-%m-%d")
     return NASA_LAYERS[layer_name].replace("{date}", date_string)
 
 
 def requests_json(url: str, params: Dict[str, Any] = None, timeout: int = 20) -> Dict[str, Any]:
     try:
-        headers = {"User-Agent": "flask-grid-digital-twin-imd-bbc/4.0"}
-        response = requests.get(
-            url,
-            params=params or {},
-            headers=headers,
-            timeout=timeout
-        )
+        headers = {"User-Agent": "sat-guard-streamlit/1.0"}
+        response = requests.get(url, params=params or {}, headers=headers, timeout=timeout)
         response.raise_for_status()
         return response.json()
     except Exception:
@@ -445,6 +425,9 @@ def find_imd_files() -> List[Path]:
     files = []
 
     for folder in possible_dirs:
+        if not folder.exists():
+            continue
+
         for name in explicit:
             p = folder / name
             if p.exists():
@@ -477,9 +460,6 @@ def choose_first_matching_column(columns: List[Any], include_terms: List[str], e
 
 
 def normalise_imd_score_from_rank(rank_value: float, max_rank: float) -> float:
-    """
-    Rank is usually 1 = most deprived. Convert to 0-100 vulnerability.
-    """
     rank_value = safe_float(rank_value, None)
     max_rank = safe_float(max_rank, None)
 
@@ -493,7 +473,6 @@ def extract_imd_summary_from_sheet(df: pd.DataFrame, source_name: str) -> pd.Dat
     if df is None or df.empty:
         return pd.DataFrame()
 
-    # Remove empty-looking columns
     df = df.copy()
     df = df.dropna(axis=1, how="all")
     if df.empty:
@@ -501,10 +480,7 @@ def extract_imd_summary_from_sheet(df: pd.DataFrame, source_name: str) -> pd.Dat
 
     cols = list(df.columns)
 
-    area_col = choose_first_matching_column(
-        cols,
-        ["local", "authority"],
-    )
+    area_col = choose_first_matching_column(cols, ["local", "authority"])
     if area_col is None:
         area_col = choose_first_matching_column(cols, ["lad"])
     if area_col is None:
@@ -538,7 +514,6 @@ def extract_imd_summary_from_sheet(df: pd.DataFrame, source_name: str) -> pd.Dat
 
     if score_col is not None:
         score = pd.to_numeric(df[score_col], errors="coerce")
-        # If score has large range, normalise roughly.
         if score.dropna().empty:
             out["imd_score_0_100"] = np.nan
         else:
@@ -558,7 +533,6 @@ def extract_imd_summary_from_sheet(df: pd.DataFrame, source_name: str) -> pd.Dat
 
     elif decile_col is not None:
         decile = pd.to_numeric(df[decile_col], errors="coerce")
-        # decile 1 = most deprived; convert to vulnerability
         out["imd_score_0_100"] = (10 - decile) / 9 * 100
         out["imd_metric_source"] = f"decile converted: {decile_col}"
 
@@ -573,19 +547,8 @@ def extract_imd_summary_from_sheet(df: pd.DataFrame, source_name: str) -> pd.Dat
     return out[["area_name", "area_key", "imd_score_0_100", "imd_metric_source", "source_file", "source_area_col"]]
 
 
-def load_imd_summary() -> Tuple[pd.DataFrame, str]:
-    """
-    Loads all uploaded IoD2025 spreadsheets and extracts a flexible summary.
-
-    The uploaded files may contain different sheets and schemas. This loader:
-    - scans each sheet
-    - tries to infer local authority / area name
-    - tries to infer IMD score, rank, decile, or average-rank style measure
-    - converts ranks/deciles into 0-100 vulnerability score
-    """
-    if IMD_CACHE["loaded"] and IMD_CACHE["summary"] is not None:
-        return IMD_CACHE["summary"].copy(), IMD_CACHE["source"]
-
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_imd_summary_cached() -> Tuple[pd.DataFrame, str]:
     files = find_imd_files()
     all_parts = []
     source_notes = []
@@ -607,7 +570,6 @@ def load_imd_summary() -> Tuple[pd.DataFrame, str]:
 
     if all_parts:
         summary = pd.concat(all_parts, ignore_index=True)
-        # Average duplicate area matches from multiple sheets.
         grouped = (
             summary.groupby("area_key")
             .agg(
@@ -622,10 +584,6 @@ def load_imd_summary() -> Tuple[pd.DataFrame, str]:
     else:
         grouped = pd.DataFrame(columns=["area_key", "area_name", "imd_score_0_100", "imd_metric_source", "source_file"])
         source = "No readable IoD2025 Excel summary found; using configured fallback proxies."
-
-    IMD_CACHE["loaded"] = True
-    IMD_CACHE["summary"] = grouped.copy()
-    IMD_CACHE["source"] = source
 
     return grouped, source
 
@@ -652,7 +610,6 @@ def infer_imd_for_place(place: str, region: str, meta: Dict[str, Any], imd_summa
                 "imd_match": f"matched token: {token}",
             }
 
-    # Regional soft match
     regional_scores = []
     for token in region_tokens:
         hit = imd_summary[imd_summary["area_key"].str.contains(token, regex=False, na=False)]
@@ -677,18 +634,18 @@ def infer_imd_for_place(place: str, region: str, meta: Dict[str, Any], imd_summa
 # EXTERNAL DATA FETCHING
 # =============================================================================
 
-WEATHER_CACHE = {}
-AIR_CACHE = {}
+@st.cache_data(ttl=900, show_spinner=False)
+def fetch_weather(lat: float, lon: float) -> Dict[str, Any]:
+    params = {
+        "latitude": lat,
+        "longitude": lon,
+        "current": WEATHER_CURRENT_VARS,
+        "timezone": "Europe/London",
+    }
+    return requests_json(OPEN_METEO_WEATHER_URL, params=params)
 
-def fetch_weather(lat, lon):
-    key = f"{lat}_{lon}"
-    if key in WEATHER_CACHE:
-        return WEATHER_CACHE[key]
 
-    data = requests_json(...)
-    WEATHER_CACHE[key] = data
-    return data
-
+@st.cache_data(ttl=900, show_spinner=False)
 def fetch_air_quality(lat: float, lon: float) -> Dict[str, Any]:
     params = {
         "latitude": lat,
@@ -699,6 +656,7 @@ def fetch_air_quality(lat: float, lon: float) -> Dict[str, Any]:
     return requests_json(OPEN_METEO_AIR_URL, params=params)
 
 
+@st.cache_data(ttl=300, show_spinner=False)
 def fetch_northern_powergrid(limit: int = 100) -> pd.DataFrame:
     payload = requests_json(NPG_DATASET_URL, params={"limit": int(clamp(limit, 1, 100))})
     records = payload.get("results", [])
@@ -751,15 +709,8 @@ def standardise_outages(raw_df: pd.DataFrame, region: str) -> pd.DataFrame:
     lat_cols = [c for c in df.columns if "lat" in c.lower()]
     lon_cols = [c for c in df.columns if "lon" in c.lower() or "lng" in c.lower()]
 
-    if lat_cols:
-        lat = pd.to_numeric(df[lat_cols[0]], errors="coerce")
-    else:
-        lat = pd.Series(np.nan, index=df.index)
-
-    if lon_cols:
-        lon = pd.to_numeric(df[lon_cols[0]], errors="coerce")
-    else:
-        lon = pd.Series(np.nan, index=df.index)
+    lat = pd.to_numeric(df[lat_cols[0]], errors="coerce") if lat_cols else pd.Series(np.nan, index=df.index)
+    lon = pd.to_numeric(df[lon_cols[0]], errors="coerce") if lon_cols else pd.Series(np.nan, index=df.index)
 
     for place, meta in REGIONS[region]["places"].items():
         mask = source_lower.str.contains(place.lower(), regex=False)
@@ -813,18 +764,17 @@ def standardise_outages(raw_df: pd.DataFrame, region: str) -> pd.DataFrame:
     if out.empty:
         synthetic = []
         for place, meta in REGIONS[region]["places"].items():
-            if random.random() < 0.55:
-                synthetic.append({
-                    "outage_reference": f"SIM-{place[:3].upper()}-{random.randint(1000, 9999)}",
-                    "outage_status": "Simulated fallback",
-                    "outage_category": "Visual fallback when live coordinates unavailable",
-                    "postcode_label": meta["postcode_prefix"],
-                    "affected_customers": random.randint(20, 520),
-                    "estimated_restore": "Unknown",
-                    "latitude": meta["lat"] + random.uniform(-0.045, 0.045),
-                    "longitude": meta["lon"] + random.uniform(-0.045, 0.045),
-                    "source_text": "Synthetic point generated because no live geocoded NPG outage was available.",
-                })
+            synthetic.append({
+                "outage_reference": f"SIM-{place[:3].upper()}-{random.randint(1000, 9999)}",
+                "outage_status": "Simulated fallback",
+                "outage_category": "Visual fallback when live coordinates unavailable",
+                "postcode_label": meta["postcode_prefix"],
+                "affected_customers": random.randint(20, 520),
+                "estimated_restore": "Unknown",
+                "latitude": meta["lat"] + random.uniform(-0.045, 0.045),
+                "longitude": meta["lon"] + random.uniform(-0.045, 0.045),
+                "source_text": "Synthetic point generated because no live geocoded NPG outage was available.",
+            })
         out = pd.DataFrame(synthetic, columns=output_cols)
 
     return out
@@ -918,7 +868,6 @@ def compute_financial_loss(
 
     ens_mwh = ens_mw * duration_hours
 
-    # Transparent prototype assumptions
     value_of_lost_load_gbp_per_mwh = 17000
     customer_interruption_gbp = affected_customers * 38
     business_disruption_gbp = ens_mwh * 1100 * clamp(business_density, 0, 1)
@@ -1061,7 +1010,7 @@ def flood_depth_proxy(row: Dict[str, Any], scenario_name: str) -> float:
 
 
 def advanced_monte_carlo(row: Dict[str, Any], outage_intensity: float, ens_mw: float, simulations: int) -> Dict[str, Any]:
-    simulations = int(clamp(simulations, 20, 500))
+    simulations = int(clamp(simulations, 10, 120))
     risk_scores = []
     resilience_scores = []
     financial_losses = []
@@ -1127,7 +1076,7 @@ def advanced_monte_carlo(row: Dict[str, Any], outage_intensity: float, ens_mw: f
 # =============================================================================
 
 def build_places(region: str, scenario_name: str, mc_runs: int) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    imd_summary, imd_source = load_imd_summary()
+    imd_summary, imd_source = load_imd_summary_cached()
 
     raw_npg = fetch_northern_powergrid(100)
     outages = standardise_outages(raw_npg, region)
@@ -1155,7 +1104,7 @@ def build_places(region: str, scenario_name: str, mc_runs: int) -> Tuple[pd.Data
             "lat": lat,
             "lon": lon,
             "postcode_prefix": meta["postcode_prefix"],
-            "time": weather.get("time") or datetime.utcnow().isoformat(),
+            "time": weather.get("time") or datetime.now(UTC).isoformat(),
             "temperature_2m": weather.get("temperature_2m", random.uniform(7, 18)),
             "apparent_temperature": weather.get("apparent_temperature", random.uniform(7, 18)),
             "wind_speed_10m": weather.get("wind_speed_10m", random.uniform(4, 26)),
@@ -1325,2240 +1274,11 @@ def build_grid(region: str, places: pd.DataFrame, outages: pd.DataFrame) -> pd.D
     return pd.DataFrame(rows)
 
 
-def get_data(region: str, scenario: str, mc_runs: int) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    key = f"{region}|{scenario}|{mc_runs}"
-    from datetime import datetime, UTC
-
-    now = datetime.now(UTC)
-
-    if (
-        DATA_CACHE["timestamp"] is not None
-        and DATA_CACHE["key"] == key
-        and (now - DATA_CACHE["timestamp"]).total_seconds() < CACHE_SECONDS
-    ):
-        return (
-            DATA_CACHE["places"].copy(),
-            DATA_CACHE["outages"].copy(),
-            DATA_CACHE["grid"].copy(),
-        )
-
+@st.cache_data(ttl=240, show_spinner=False)
+def get_data_cached(region: str, scenario: str, mc_runs: int) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     places, outages = build_places(region, scenario, mc_runs)
     grid = build_grid(region, places, outages)
-
-    DATA_CACHE["key"] = key
-    DATA_CACHE["timestamp"] = now
-    DATA_CACHE["places"] = places.copy()
-    DATA_CACHE["outages"] = outages.copy()
-    DATA_CACHE["grid"] = grid.copy()
-
     return places, outages, grid
-
-
-# =============================================================================
-# CONTROLS
-# =============================================================================
-
-def get_controls() -> Tuple[str, str, str, str, int]:
-    region = request.args.get("region", "North East")
-    if region not in REGIONS:
-        region = "North East"
-
-    scenario = request.args.get("scenario", "Live / Real-time")
-    if scenario not in SCENARIOS:
-        scenario = "Live / Real-time"
-
-    layer = request.args.get("layer", "VIIRS NOAA-20 True Colour")
-    if layer not in NASA_LAYERS:
-        layer = "VIIRS NOAA-20 True Colour"
-
-    page = request.args.get("page", "overview")
-
-    mc = safe_int(request.args.get("mc"), 30)
-    mc = int(clamp(mc, 20, 500))
-
-    return region, scenario, layer, page, mc
-
-
-def make_base_url(region: str, scenario: str, layer: str, mc: int) -> str:
-    return f"/?region={region}&scenario={scenario}&layer={layer}&mc={mc}"
-
-
-# =============================================================================
-# TEMPLATE
-# =============================================================================
-
-BASE_HTML = """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>North East & Yorkshire Grid Digital Twin</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-
-    <style>
-        :root {
-            --bg: #020617;
-            --panel: rgba(15, 23, 42, 0.88);
-            --panel2: rgba(30, 41, 59, 0.82);
-            --border: rgba(148, 163, 184, 0.24);
-            --text: #e5e7eb;
-            --muted: #94a3b8;
-            --blue: #38bdf8;
-            --green: #22c55e;
-            --yellow: #eab308;
-            --orange: #f97316;
-            --red: #ef4444;
-            --purple: #a855f7;
-        }
-
-        * { box-sizing: border-box; }
-
-        body {
-            margin: 0;
-            font-family: "Segoe UI", Arial, sans-serif;
-            color: var(--text);
-            background:
-                radial-gradient(circle at top left, rgba(56,189,248,0.25), transparent 32%),
-                radial-gradient(circle at bottom right, rgba(168,85,247,0.20), transparent 34%),
-                #020617;
-        }
-
-        .app { display: flex; min-height: 100vh; }
-
-        .sidebar {
-            width: 318px;
-            min-height: 100vh;
-            position: fixed;
-            top: 0;
-            left: 0;
-            padding: 24px 18px;
-            background: rgba(2,6,23,0.94);
-            border-right: 1px solid var(--border);
-            overflow-y: auto;
-            backdrop-filter: blur(16px);
-        }
-
-        .brand-row {
-            display: flex;
-            align-items: center;
-            gap: 14px;
-            margin-bottom: 24px;
-        }
-
-        .logo {
-            width: 56px;
-            height: 56px;
-            border-radius: 18px;
-            display: grid;
-            place-items: center;
-            background: linear-gradient(135deg, #0284c7, #38bdf8);
-            box-shadow: 0 0 34px rgba(56,189,248,0.42);
-            font-size: 27px;
-        }
-
-        .brand-title {
-            color: white;
-            font-size: 22px;
-            font-weight: 950;
-            letter-spacing: -0.03em;
-        }
-
-        .brand-sub {
-            color: var(--muted);
-            font-size: 12px;
-            margin-top: 3px;
-        }
-
-        .nav a {
-            display: block;
-            color: #cbd5e1;
-            text-decoration: none;
-            font-weight: 820;
-            padding: 13px 14px;
-            border-radius: 16px;
-            margin-bottom: 8px;
-            transition: 0.18s ease;
-        }
-
-        .nav a:hover {
-            color: var(--blue);
-            background: rgba(56,189,248,0.14);
-            transform: translateX(3px);
-        }
-
-        .control {
-            margin-top: 18px;
-            padding: 16px;
-            border-radius: 22px;
-            border: 1px solid var(--border);
-            background: linear-gradient(135deg, rgba(14,165,233,0.15), rgba(168,85,247,0.10));
-        }
-
-        .control label {
-            display: block;
-            font-size: 13px;
-            font-weight: 850;
-            margin-top: 12px;
-            margin-bottom: 6px;
-            color: #bfdbfe;
-        }
-
-        select, input {
-            width: 100%;
-            border: 1px solid var(--border);
-            border-radius: 14px;
-            background: rgba(2,6,23,0.83);
-            color: white;
-            padding: 12px;
-        }
-
-        button, .btn {
-            display: inline-block;
-            border: 0;
-            border-radius: 15px;
-            background: linear-gradient(135deg, #0284c7, #38bdf8);
-            color: white;
-            font-weight: 950;
-            padding: 12px 18px;
-            cursor: pointer;
-            text-decoration: none;
-            text-align: center;
-        }
-
-        .control button {
-            width: 100%;
-            margin-top: 14px;
-        }
-
-        .main {
-            margin-left: 318px;
-            width: calc(100% - 318px);
-            padding: 28px;
-        }
-
-        .topbar {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            gap: 16px;
-            margin-bottom: 24px;
-        }
-
-        .title {
-            font-size: 35px;
-            font-weight: 950;
-            color: white;
-            letter-spacing: -0.04em;
-        }
-
-        .subtitle {
-            color: var(--muted);
-            margin-top: 7px;
-            max-width: 980px;
-        }
-
-        .chip {
-            display: inline-block;
-            padding: 10px 14px;
-            border-radius: 999px;
-            background: rgba(15,23,42,0.88);
-            border: 1px solid var(--border);
-            color: #bfdbfe;
-            font-size: 13px;
-            font-weight: 850;
-            margin-left: 8px;
-            margin-bottom: 8px;
-        }
-
-        .live-chip {
-            background: rgba(34,197,94,0.15);
-            color: #bbf7d0;
-            border-color: rgba(34,197,94,0.35);
-        }
-
-        .scenario-chip {
-            background: rgba(249,115,22,0.15);
-            color: #fed7aa;
-            border-color: rgba(249,115,22,0.35);
-        }
-
-        .grid {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 18px;
-            margin-bottom: 20px;
-        }
-
-        .grid-2 {
-            display: grid;
-            grid-template-columns: 1.2fr 0.8fr;
-            gap: 18px;
-            margin-bottom: 20px;
-        }
-
-        .grid-3 {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 18px;
-            margin-bottom: 20px;
-        }
-
-        .card {
-            background: var(--panel);
-            border: 1px solid var(--border);
-            border-radius: 25px;
-            padding: 22px;
-            box-shadow: 0 24px 60px rgba(0,0,0,0.30);
-            backdrop-filter: blur(14px);
-            overflow: hidden;
-        }
-
-        .bbc-card {
-            background:
-                linear-gradient(135deg, rgba(14,165,233,0.25), rgba(2,6,23,0.92)),
-                radial-gradient(circle at 82% 16%, rgba(250,204,21,0.25), transparent 33%);
-        }
-
-        h2, h3 {
-            margin-top: 0;
-            color: white;
-        }
-
-        .metric-label {
-            color: var(--muted);
-            font-size: 13px;
-            margin-bottom: 8px;
-        }
-
-        .metric-value {
-            font-size: 34px;
-            font-weight: 950;
-            color: white;
-            line-height: 1.08;
-        }
-
-        .metric-note {
-            color: var(--blue);
-            font-size: 13px;
-            margin-top: 8px;
-        }
-
-        .badge {
-            display: inline-block;
-            border-radius: 999px;
-            padding: 7px 11px;
-            font-size: 12px;
-            font-weight: 900;
-        }
-
-        .Low, .Robust, .Stable {
-            background: rgba(34,197,94,0.16);
-            color: #86efac;
-        }
-
-        .Moderate, .Functional {
-            background: rgba(56,189,248,0.16);
-            color: #7dd3fc;
-        }
-
-        .High, .Stressed {
-            background: rgba(249,115,22,0.16);
-            color: #fdba74;
-        }
-
-        .Priority1 { background: rgba(239,68,68,0.18); color: #fca5a5; }
-
-        .Priority2 { background: rgba(249,115,22,0.16); color: #fdba74; }
-
-        .Priority3 { background: rgba(234,179,8,0.16); color: #fde68a; }
-
-        .Monitor { background: rgba(34,197,94,0.16); color: #86efac; }
-
-        .Severe, .Fragile {
-            background: rgba(239,68,68,0.18);
-            color: #fca5a5;
-        }
-
-        .bar {
-            width: 100%;
-            height: 10px;
-            background: rgba(148,163,184,0.18);
-            border-radius: 999px;
-            overflow: hidden;
-            margin-top: 8px;
-        }
-
-        .fill {
-            height: 100%;
-            background: linear-gradient(90deg, #22c55e, #38bdf8);
-        }
-
-        .fill-risk {
-            height: 100%;
-            background: linear-gradient(90deg, #eab308, #ef4444);
-        }
-
-        .fill-purple {
-            height: 100%;
-            background: linear-gradient(90deg, #38bdf8, #a855f7);
-        }
-
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 12px;
-        }
-
-        th, td {
-            padding: 13px;
-            border-bottom: 1px solid rgba(148,163,184,0.16);
-            text-align: left;
-            font-size: 14px;
-        }
-
-        th {
-            color: #93c5fd;
-            font-size: 12px;
-            letter-spacing: 0.06em;
-            text-transform: uppercase;
-        }
-
-        tr:hover td {
-            background: rgba(56,189,248,0.04);
-        }
-
-        .map {
-            height: 680px;
-            width: 100%;
-            border-radius: 24px;
-            border: 1px solid var(--border);
-            background: #0f172a;
-            overflow: hidden;
-            position: relative;
-        }
-
-        .small-map {
-            height: 360px;
-            width: 100%;
-            border-radius: 20px;
-            border: 1px solid var(--border);
-            background: #0f172a;
-            overflow: hidden;
-        }
-
-        .hazard-canvas {
-            position: absolute;
-            top: 0;
-            left: 0;
-            z-index: 450;
-            pointer-events: none;
-        }
-
-        .map-hud {
-            position: absolute;
-            top: 14px;
-            right: 14px;
-            z-index: 800;
-            background: rgba(2,6,23,0.76);
-            border: 1px solid rgba(148,163,184,0.28);
-            border-radius: 16px;
-            padding: 12px 14px;
-            color: white;
-            font-size: 13px;
-            backdrop-filter: blur(8px);
-        }
-
-        .chart {
-            height: 245px;
-            display: flex;
-            align-items: end;
-            gap: 11px;
-            padding-top: 18px;
-        }
-
-        .chart-col {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: end;
-            gap: 8px;
-            color: var(--muted);
-            font-size: 12px;
-        }
-
-        .chart-bar {
-            width: 100%;
-            max-width: 44px;
-            border-radius: 14px 14px 4px 4px;
-            background: linear-gradient(180deg, #38bdf8, #1d4ed8);
-            box-shadow: 0 0 24px rgba(56,189,248,0.25);
-        }
-
-        .histogram {
-            height: 230px;
-            display: flex;
-            align-items: end;
-            gap: 4px;
-            padding-top: 18px;
-        }
-
-        .hist-bar {
-            flex: 1;
-            min-width: 4px;
-            border-radius: 6px 6px 0 0;
-            background: linear-gradient(180deg, #a855f7, #38bdf8);
-        }
-
-        .alert {
-            padding: 16px;
-            border-radius: 18px;
-            border: 1px solid rgba(239,68,68,0.28);
-            background: rgba(239,68,68,0.14);
-            color: #fecaca;
-            margin-bottom: 12px;
-        }
-
-        .success {
-            border-color: rgba(34,197,94,0.28);
-            background: rgba(34,197,94,0.14);
-            color: #bbf7d0;
-        }
-
-        .map-toolbar {
-            display: flex;
-            gap: 10px;
-            align-items: center;
-            flex-wrap: wrap;
-            margin: 14px 0;
-        }
-
-        .range {
-            flex: 1;
-            min-width: 220px;
-        }
-
-
-        .metra-scene {
-            position: relative;
-            height: 760px;
-            border-radius: 28px;
-            overflow: hidden;
-            background: radial-gradient(circle at 35% 20%, rgba(56,189,248,0.12), transparent 32%), #07111f;
-            border: 1px solid var(--border);
-            box-shadow: 0 30px 80px rgba(0,0,0,0.38);
-            perspective: 1200px;
-        }
-
-        .metra-stage {
-            position: absolute;
-            inset: 0;
-            transform-origin: 50% 65%;
-            transform: rotateX(54deg) rotateZ(-4deg) scale(1.12);
-            filter: saturate(1.08) contrast(1.04);
-        }
-
-        .metra-stage.flat {
-            transform: rotateX(0deg) rotateZ(0deg) scale(1.0);
-        }
-
-        .metra-map {
-            position: absolute;
-            inset: 0;
-            z-index: 1;
-        }
-
-        .metra-canvas {
-            position: absolute;
-            inset: 0;
-            z-index: 480;
-            pointer-events: none;
-        }
-
-        .metra-depth-canvas {
-            position: absolute;
-            inset: 0;
-            z-index: 520;
-            pointer-events: none;
-        }
-
-        .metra-ui {
-            position: absolute;
-            left: 18px;
-            right: 18px;
-            bottom: 18px;
-            z-index: 900;
-            display: grid;
-            grid-template-columns: auto auto 1fr auto;
-            gap: 12px;
-            align-items: center;
-            padding: 14px;
-            border-radius: 20px;
-            border: 1px solid rgba(148,163,184,0.28);
-            background: rgba(2,6,23,0.74);
-            backdrop-filter: blur(16px);
-        }
-
-        .metra-top-hud {
-            position: absolute;
-            top: 18px;
-            left: 18px;
-            z-index: 900;
-            padding: 14px 16px;
-            border-radius: 20px;
-            border: 1px solid rgba(148,163,184,0.28);
-            background: rgba(2,6,23,0.70);
-            backdrop-filter: blur(16px);
-            max-width: 380px;
-        }
-
-        .metra-title {
-            font-size: 15px;
-            font-weight: 950;
-            color: white;
-            margin-bottom: 4px;
-        }
-
-        .metra-sub {
-            color: #cbd5e1;
-            font-size: 12px;
-            line-height: 1.45;
-        }
-
-        .metra-hour {
-            font-size: 24px;
-            font-weight: 950;
-            color: white;
-            min-width: 92px;
-        }
-
-        .metra-toggle {
-            display: inline-flex;
-            gap: 8px;
-            align-items: center;
-        }
-
-        .metra-toggle input {
-            width: auto;
-        }
-
-        .metra-legend {
-            position: absolute;
-            right: 18px;
-            top: 18px;
-            z-index: 900;
-            padding: 12px 14px;
-            border-radius: 18px;
-            border: 1px solid rgba(148,163,184,0.28);
-            background: rgba(2,6,23,0.62);
-            backdrop-filter: blur(16px);
-            font-size: 12px;
-            color: #cbd5e1;
-        }
-
-        .legend-row {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            margin: 6px 0;
-        }
-
-        .legend-dot {
-            width: 12px;
-            height: 12px;
-            border-radius: 999px;
-            display: inline-block;
-        }
-
-
-        .bbc-forecast-scene {
-            position: relative;
-            height: 760px;
-            border-radius: 28px;
-            overflow: hidden;
-            border: 1px solid var(--border);
-            background: #07111f;
-            box-shadow: 0 30px 80px rgba(0,0,0,0.34);
-        }
-
-        .bbc-forecast-map {
-            position: absolute;
-            inset: 0;
-            z-index: 1;
-        }
-
-        .bbc-weather-canvas {
-            position: absolute;
-            inset: 0;
-            z-index: 450;
-            pointer-events: none;
-        }
-
-        .bbc-forecast-top {
-            position: absolute;
-            top: 18px;
-            left: 18px;
-            z-index: 900;
-            padding: 14px 16px;
-            border-radius: 18px;
-            border: 1px solid rgba(148,163,184,0.28);
-            background: rgba(2,6,23,0.72);
-            backdrop-filter: blur(14px);
-            max-width: 430px;
-        }
-
-        .bbc-forecast-title {
-            font-size: 16px;
-            font-weight: 950;
-            color: white;
-            margin-bottom: 4px;
-        }
-
-        .bbc-forecast-sub {
-            color: #cbd5e1;
-            font-size: 12px;
-            line-height: 1.45;
-        }
-
-        .bbc-forecast-controls {
-            position: absolute;
-            left: 18px;
-            right: 18px;
-            bottom: 18px;
-            z-index: 900;
-            display: grid;
-            grid-template-columns: auto auto 1fr auto auto;
-            gap: 12px;
-            align-items: center;
-            padding: 14px;
-            border-radius: 20px;
-            border: 1px solid rgba(148,163,184,0.30);
-            background: rgba(2,6,23,0.76);
-            backdrop-filter: blur(16px);
-        }
-
-        .bbc-time-pill {
-            min-width: 94px;
-            text-align: center;
-            font-size: 24px;
-            font-weight: 950;
-            color: white;
-        }
-
-        .bbc-legend {
-            position: absolute;
-            right: 18px;
-            top: 18px;
-            z-index: 900;
-            width: 230px;
-            padding: 13px 14px;
-            border-radius: 18px;
-            border: 1px solid rgba(148,163,184,0.28);
-            background: rgba(2,6,23,0.68);
-            backdrop-filter: blur(14px);
-            color: #cbd5e1;
-            font-size: 12px;
-        }
-
-        .bbc-gradient {
-            height: 12px;
-            border-radius: 999px;
-            background: linear-gradient(90deg, rgba(56,189,248,.35), rgba(34,197,94,.45), rgba(234,179,8,.65), rgba(249,115,22,.75), rgba(239,68,68,.85));
-            margin: 8px 0;
-        }
-
-        .bbc-layer-toggle {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            color: #cbd5e1;
-            font-size: 12px;
-        }
-
-        .bbc-layer-toggle input {
-            width: auto;
-        }
-
-
-        .bbc-ref-scene {
-            position: relative;
-            height: 780px;
-            border-radius: 28px;
-            overflow: hidden;
-            border: 1px solid rgba(148,163,184,0.28);
-            background:
-                radial-gradient(circle at 18% 22%, rgba(56,189,248,0.15), transparent 30%),
-                linear-gradient(180deg, #0a1726, #07101d);
-            box-shadow: 0 34px 90px rgba(0,0,0,0.42);
-        }
-
-        .bbc-ref-map {
-            position: absolute;
-            inset: 0;
-            z-index: 1;
-            filter: saturate(1.18) contrast(1.08) brightness(0.86);
-        }
-
-        .bbc-ref-canvas {
-            position: absolute;
-            inset: 0;
-            z-index: 460;
-            pointer-events: none;
-        }
-
-        .bbc-ref-iso-canvas {
-            position: absolute;
-            inset: 0;
-            z-index: 430;
-            pointer-events: none;
-        }
-
-        .bbc-brand {
-            position: absolute;
-            left: 22px;
-            bottom: 106px;
-            z-index: 920;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            color: white;
-            text-shadow: 0 2px 8px rgba(0,0,0,0.78);
-        }
-
-        .bbc-blocks {
-            display: flex;
-            gap: 5px;
-        }
-
-        .bbc-blocks span {
-            display: grid;
-            place-items: center;
-            width: 34px;
-            height: 34px;
-            background: rgba(255,255,255,0.96);
-            color: #1e293b;
-            font-weight: 950;
-            font-size: 21px;
-            line-height: 1;
-        }
-
-        .bbc-weather-word {
-            font-size: 32px;
-            font-weight: 950;
-            letter-spacing: -0.04em;
-        }
-
-        .bbc-ref-top {
-            position: absolute;
-            top: 18px;
-            left: 18px;
-            z-index: 930;
-            padding: 13px 16px;
-            border-radius: 16px;
-            border: 1px solid rgba(255,255,255,0.18);
-            background: rgba(3,10,22,0.58);
-            backdrop-filter: blur(12px);
-            max-width: 470px;
-        }
-
-        .bbc-ref-title {
-            color: white;
-            font-weight: 950;
-            font-size: 17px;
-            margin-bottom: 4px;
-        }
-
-        .bbc-ref-sub {
-            color: #dbeafe;
-            font-size: 12px;
-            line-height: 1.45;
-        }
-
-        .bbc-time-box {
-            position: absolute;
-            right: 24px;
-            bottom: 110px;
-            z-index: 930;
-            display: flex;
-            box-shadow: 0 6px 16px rgba(0,0,0,0.35);
-            font-weight: 950;
-        }
-
-        .bbc-time-day {
-            background: rgba(15,118,110,0.93);
-            color: white;
-            padding: 10px 16px;
-            font-size: 16px;
-            letter-spacing: 0.03em;
-        }
-
-        .bbc-time-hour {
-            background: rgba(2,6,23,0.88);
-            color: white;
-            padding: 10px 16px;
-            font-size: 16px;
-            min-width: 78px;
-            text-align: center;
-        }
-
-        .bbc-ref-controls {
-            position: absolute;
-            left: 18px;
-            right: 18px;
-            bottom: 18px;
-            z-index: 940;
-            display: grid;
-            grid-template-columns: auto auto 1fr auto auto auto auto auto;
-            gap: 10px;
-            align-items: center;
-            padding: 13px;
-            border-radius: 18px;
-            border: 1px solid rgba(255,255,255,0.18);
-            background: rgba(2,6,23,0.72);
-            backdrop-filter: blur(14px);
-        }
-
-        .bbc-ref-toggle {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            color: #dbeafe;
-            font-size: 12px;
-            white-space: nowrap;
-        }
-
-        .bbc-ref-toggle input {
-            width: auto;
-        }
-
-        .bbc-ref-legend {
-            position: absolute;
-            right: 18px;
-            top: 18px;
-            z-index: 930;
-            width: 240px;
-            padding: 12px 14px;
-            border-radius: 16px;
-            border: 1px solid rgba(255,255,255,0.18);
-            background: rgba(3,10,22,0.54);
-            backdrop-filter: blur(12px);
-            color: #dbeafe;
-            font-size: 12px;
-        }
-
-        .bbc-ref-gradient {
-            height: 13px;
-            border-radius: 999px;
-            background: linear-gradient(90deg, rgba(90,180,255,.35), rgba(37,99,235,.48), rgba(34,197,94,.62), rgba(234,179,8,.78), rgba(239,68,68,.88), rgba(168,85,247,.9));
-            margin: 8px 0;
-        }
-
-        .city-label-bbc {
-            color: white;
-            font-size: 16px;
-            font-weight: 700;
-            text-shadow: 0 2px 5px #000, 0 0 3px #000;
-            white-space: nowrap;
-        }
-
-        .city-label-bbc::after {
-            content: "";
-            display: inline-block;
-            width: 7px;
-            height: 7px;
-            margin-left: 6px;
-            background: white;
-            box-shadow: 0 1px 4px rgba(0,0,0,.65);
-        }
-
-
-        .q1-scene {
-            position: relative;
-            height: 820px;
-            border-radius: 30px;
-            overflow: hidden;
-            border: 1px solid rgba(148,163,184,0.28);
-            background:
-                radial-gradient(circle at 30% 18%, rgba(59,130,246,0.22), transparent 28%),
-                linear-gradient(180deg, #07111f, #020617);
-            box-shadow: 0 38px 96px rgba(0,0,0,0.45);
-        }
-
-        .q1-map {
-            position: absolute;
-            inset: 0;
-            z-index: 1;
-            filter: saturate(1.28) contrast(1.15) brightness(0.82);
-        }
-
-        .q1-pressure-canvas {
-            position: absolute;
-            inset: 0;
-            z-index: 420;
-            pointer-events: none;
-        }
-
-        .q1-weather-canvas {
-            position: absolute;
-            inset: 0;
-            z-index: 465;
-            pointer-events: none;
-        }
-
-        .q1-front-canvas {
-            position: absolute;
-            inset: 0;
-            z-index: 510;
-            pointer-events: none;
-        }
-
-        .q1-brand {
-            position: absolute;
-            left: 24px;
-            bottom: 112px;
-            z-index: 950;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            color: white;
-            text-shadow: 0 3px 10px rgba(0,0,0,0.85);
-        }
-
-        .q1-brand-blocks {
-            display: flex;
-            gap: 5px;
-        }
-
-        .q1-brand-blocks span {
-            display: grid;
-            place-items: center;
-            width: 35px;
-            height: 35px;
-            background: rgba(255,255,255,0.96);
-            color: #1e293b;
-            font-weight: 950;
-            font-size: 22px;
-        }
-
-        .q1-brand-word {
-            font-size: 34px;
-            font-weight: 950;
-            letter-spacing: -0.04em;
-        }
-
-        .q1-top-card {
-            position: absolute;
-            top: 18px;
-            left: 18px;
-            z-index: 960;
-            padding: 14px 17px;
-            border-radius: 18px;
-            border: 1px solid rgba(255,255,255,0.18);
-            background: rgba(3,10,22,0.62);
-            backdrop-filter: blur(14px);
-            max-width: 520px;
-        }
-
-        .q1-top-title {
-            color: white;
-            font-weight: 950;
-            font-size: 18px;
-            margin-bottom: 4px;
-        }
-
-        .q1-top-sub {
-            color: #dbeafe;
-            font-size: 12px;
-            line-height: 1.45;
-        }
-
-        .q1-time-strip {
-            position: absolute;
-            right: 24px;
-            bottom: 114px;
-            z-index: 960;
-            display: flex;
-            box-shadow: 0 8px 22px rgba(0,0,0,0.45);
-            font-weight: 950;
-        }
-
-        .q1-day {
-            background: rgba(13,148,136,0.94);
-            color: white;
-            padding: 11px 18px;
-            font-size: 16px;
-            letter-spacing: 0.04em;
-        }
-
-        .q1-hour {
-            background: rgba(2,6,23,0.92);
-            color: white;
-            padding: 11px 18px;
-            min-width: 80px;
-            text-align: center;
-            font-size: 16px;
-        }
-
-        .q1-controls {
-            position: absolute;
-            left: 18px;
-            right: 18px;
-            bottom: 18px;
-            z-index: 970;
-            display: grid;
-            grid-template-columns: auto auto 1fr auto auto auto auto auto auto;
-            gap: 10px;
-            align-items: center;
-            padding: 13px;
-            border-radius: 20px;
-            border: 1px solid rgba(255,255,255,0.18);
-            background: rgba(2,6,23,0.74);
-            backdrop-filter: blur(16px);
-        }
-
-        .q1-toggle {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            color: #dbeafe;
-            font-size: 12px;
-            white-space: nowrap;
-        }
-
-        .q1-toggle input {
-            width: auto;
-        }
-
-        .q1-legend {
-            position: absolute;
-            right: 18px;
-            top: 18px;
-            z-index: 960;
-            width: 255px;
-            padding: 13px 15px;
-            border-radius: 18px;
-            border: 1px solid rgba(255,255,255,0.18);
-            background: rgba(3,10,22,0.58);
-            backdrop-filter: blur(14px);
-            color: #dbeafe;
-            font-size: 12px;
-        }
-
-        .q1-gradient {
-            height: 14px;
-            border-radius: 999px;
-            background: linear-gradient(90deg, rgba(59,130,246,.38), rgba(37,99,235,.56), rgba(34,197,94,.66), rgba(234,179,8,.80), rgba(249,115,22,.86), rgba(239,68,68,.92), rgba(168,85,247,.95));
-            margin: 8px 0;
-        }
-
-        .city-label-bbc {
-            color: white;
-            font-size: 16px;
-            font-weight: 800;
-            text-shadow: 0 2px 5px #000, 0 0 3px #000;
-            white-space: nowrap;
-        }
-
-        .city-label-bbc::after {
-            content: "";
-            display: inline-block;
-            width: 7px;
-            height: 7px;
-            margin-left: 6px;
-            background: white;
-            box-shadow: 0 1px 4px rgba(0,0,0,.70);
-        }
-
-        .wx-watermark {
-            position: absolute;
-            left: 50%;
-            transform: translateX(-50%);
-            bottom: 103px;
-            z-index: 950;
-            color: rgba(255,255,255,0.72);
-            font-size: 12px;
-            font-weight: 900;
-            letter-spacing: 0.08em;
-            text-shadow: 0 2px 6px rgba(0,0,0,0.8);
-        }
-
-        .Priority1 { background: rgba(239,68,68,0.18); color: #fca5a5; }
-        .Priority2 { background: rgba(249,115,22,0.16); color: #fdba74; }
-        .Priority3 { background: rgba(234,179,8,0.16); color: #fde68a; }
-        .Monitor { background: rgba(34,197,94,0.16); color: #86efac; }
-
-        .footer {
-            color: #64748b;
-            font-size: 12px;
-            margin-top: 26px;
-        }
-
-        @media(max-width: 1100px) {
-            .sidebar {
-                position: relative;
-                width: 100%;
-                min-height: auto;
-            }
-
-            .app {
-                display: block;
-            }
-
-            .main {
-                margin-left: 0;
-                width: 100%;
-            }
-
-            .grid, .grid-2, .grid-3 {
-                grid-template-columns: 1fr;
-            }
-
-            .topbar {
-                display: block;
-            }
-        }
-    </style>
-</head>
-<body>
-<div class="app">
-    <aside class="sidebar">
-        <div class="brand-row">
-            <div class="logo">⚡</div>
-            <div>
-                <div class="brand-title">Grid Digital Twin</div>
-                <div class="brand-sub">NASA · NPG · IoD2025 · BBC-style Hazard</div>
-            </div>
-        </div>
-
-        <div class="nav">
-            <a href="{{ base_url }}">📊 Overview</a>
-            <a href="{{ base_url }}&page=simple">🌬️ Simple Map</a>
-            <a href="{{ base_url }}&page=bbc">🌧️ BBC Weather Simulation</a>
-            <a href="{{ base_url }}&page=resilience">🛡️ Resilience</a>
-            <a href="{{ base_url }}&page=postcode">📮 Postcodes</a>
-            <a href="{{ base_url }}&page=postcode_resilience">📍 Postcode Resilience</a>
-            <a href="{{ base_url }}&page=investment">🏗️ Investment Priorities</a>
-            <a href="{{ base_url }}&page=finance">💷 Financial Loss</a>
-            <a href="{{ base_url }}&page=montecarlo">🔬 Monte Carlo</a>
-            <a href="{{ base_url }}&page=satellite">🛰️ NASA Storyboard</a>
-            <a href="{{ base_url }}&page=data">📋 Data</a>
-        </div>
-
-        <form class="control" method="get">
-            <strong>Controls</strong>
-
-            <label>Region</label>
-            <select name="region">
-                {% for r in regions %}
-                <option value="{{ r }}" {% if r == region %}selected{% endif %}>{{ r }}</option>
-                {% endfor %}
-            </select>
-
-            <label>Mode / What-if Scenario</label>
-            <select name="scenario">
-                {% for s in scenarios %}
-                <option value="{{ s }}" {% if s == scenario %}selected{% endif %}>{{ s }}</option>
-                {% endfor %}
-            </select>
-
-            <label>NASA Layer</label>
-            <select name="layer">
-                {% for l in layers %}
-                <option value="{{ l }}" {% if l == layer %}selected{% endif %}>{{ l }}</option>
-                {% endfor %}
-            </select>
-
-            <label>Monte Carlo runs</label>
-            <input type="number" name="mc" min="20" max="500" value="{{ mc }}">
-
-            <input type="hidden" name="page" value="{{ page }}">
-            <button>Update</button>
-        </form>
-
-        <div class="control">
-            <strong>IoD2025 social vulnerability</strong>
-            <p style="color:#94a3b8;">
-                The app scans uploaded IoD2025 Excel files and uses matched authority scores when possible.
-            </p>
-        </div>
-    </aside>
-
-    <main class="main">
-        <div class="topbar">
-            <div>
-                <div class="title">{{ title }}</div>
-                <div class="subtitle">{{ subtitle }}</div>
-            </div>
-            <div>
-                <span class="chip {% if scenario == 'Live / Real-time' %}live-chip{% else %}scenario-chip{% endif %}">
-                    {{ scenario }}
-                </span>
-                <span class="chip">{{ region }}</span>
-                <span class="chip">UTC {{ now }}</span>
-            </div>
-        </div>
-
-        {{ content | safe }}
-
-        <div class="footer">
-            Prototype digital twin · Leaflet maps · High-visibility moving hazard canvas · Northern Powergrid feed · NASA GIBS tiles · Open-Meteo weather and air quality · IoD2025-compatible social vulnerability · Financial loss model
-        </div>
-    </main>
-</div>
-
-{{ scripts | safe }}
-</body>
-</html>
-"""
-
-# =============================================================================
-# RENDER HELPERS
-# =============================================================================
-
-
-def render_app(title: str, subtitle: str, content: str, scripts: str = "") -> str:
-    region, scenario, layer, page, mc = get_controls()
-    return render_template_string(
-        BASE_HTML,
-        title=title,
-        subtitle=subtitle,
-        content=content,
-        scripts=scripts,
-        region=region,
-        scenario=scenario,
-        layer=layer,
-        page=page,
-        mc=mc,
-        regions=list(REGIONS.keys()),
-        scenarios=list(SCENARIOS.keys()),
-        layers=list(NASA_LAYERS.keys()),
-        base_url=make_base_url(region, scenario, layer, mc),
-        now=datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-    )
-
-
-def metric_card(label: str, value: str, note: str = "") -> str:
-    return f"""
-    <div class="card">
-        <div class="metric-label">{label}</div>
-        <div class="metric-value">{value}</div>
-        <div class="metric-note">{note}</div>
-    </div>
-    """
-
-
-def places_table(places: pd.DataFrame) -> str:
-    rows = ""
-    for _, r in places.sort_values("final_risk_score", ascending=False).iterrows():
-        rows += f"""
-        <tr>
-            <td><strong>{r['place']}</strong></td>
-            <td>{round(r['wind_speed_10m'],1)} km/h</td>
-            <td>{round(r['precipitation'],2)} mm</td>
-            <td>{round(r['european_aqi'],1)}</td>
-            <td>{round(r['imd_score'],1)}</td>
-            <td>{round(r['social_vulnerability'],1)}</td>
-            <td>{int(r['nearby_outages_25km'])}</td>
-            <td>{round(r['energy_not_supplied_mw'],1)} MW</td>
-            <td>£{round(r['total_financial_loss_gbp']/1_000_000,2)}m</td>
-            <td><span class="badge {r['risk_label']}">{r['risk_label']}</span></td>
-            <td>
-                {round(r['final_risk_score'],1)}
-                <div class="bar"><div class="fill-risk" style="width:{r['final_risk_score']}%"></div></div>
-            </td>
-            <td>
-                <span class="badge {r['resilience_label']}">{r['resilience_label']}</span>
-                <div class="bar"><div class="fill" style="width:{r['resilience_index']}%"></div></div>
-            </td>
-        </tr>
-        """
-
-    return f"""
-    <table>
-        <tr>
-            <th>Place</th>
-            <th>Wind</th>
-            <th>Rain</th>
-            <th>AQI</th>
-            <th>IoD/IMD</th>
-            <th>Social vuln.</th>
-            <th>Outages</th>
-            <th>ENS</th>
-            <th>Financial loss</th>
-            <th>Risk</th>
-            <th>Risk score</th>
-            <th>Resilience</th>
-        </tr>
-        {rows}
-    </table>
-    """
-
-
-def chart_bars(places: pd.DataFrame, column: str) -> str:
-    bars = ""
-    for _, r in places.iterrows():
-        value = clamp(safe_float(r.get(column)), 0, 100)
-        bars += f"""
-        <div class="chart-col">
-            <div class="chart-bar" style="height:{max(8, value * 2.1)}px"></div>
-            <span>{r['place']}</span>
-        </div>
-        """
-    return f'<div class="chart">{bars}</div>'
-
-
-def histogram(values: List[float]) -> str:
-    if not values:
-        return "<p>No Monte Carlo data available.</p>"
-
-    counts, _ = np.histogram(values, bins=24, range=(0, 100))
-    max_count = max(1, int(max(counts)))
-    bars = ""
-    for count in counts:
-        height = max(4, (count / max_count) * 220)
-        bars += f'<div class="hist-bar" style="height:{height}px"></div>'
-    return f'<div class="histogram">{bars}</div>'
-
-
-# =============================================================================
-# API ROUTES
-# =============================================================================
-
-def simple_map_script(map_id: str) -> str:
-    return f"""
-    <script>
-    document.addEventListener("DOMContentLoaded", async function() {{
-        const response = await fetch("/api/data" + window.location.search);
-        const data = await response.json();
-
-        const centre = data.center;
-        const map = L.map("{map_id}").setView([centre.lat, centre.lon], centre.zoom);
-
-        L.tileLayer("https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png", {{
-            maxZoom: 19,
-            attribution: "OpenStreetMap"
-        }}).addTo(map);
-
-        L.tileLayer(data.nasa_tile, {{
-            attribution: "NASA GIBS",
-            opacity: 0.35
-        }}).addTo(map);
-
-        function riskColour(v) {{
-            if (v >= 75) return "#ef4444";
-            if (v >= 55) return "#f97316";
-            if (v >= 35) return "#eab308";
-            return "#22c55e";
-        }}
-
-        data.grid.forEach(g => {{
-            const intensity = Math.min(g.wind_speed / 45, 1);
-            L.circle([g.lat, g.lon], {{
-                radius: 2600 + intensity * 9000,
-                color: "#38bdf8",
-                fillColor: "#38bdf8",
-                fillOpacity: 0.08 + intensity * 0.18,
-                weight: 1
-            }}).addTo(map).bindPopup(
-                "<b>Wind cell</b><br>" +
-                "Wind speed: " + g.wind_speed + " km/h<br>" +
-                "Rain: " + g.rain + " mm<br>" +
-                "Risk: " + g.risk_score + "<br>" +
-                "ENS: " + g.energy_not_supplied_mw + " MW<br>" +
-                "Financial loss: £" + Math.round(g.financial_loss_gbp).toLocaleString()
-            );
-        }});
-
-        data.places.forEach(p => {{
-            L.circleMarker([p.lat, p.lon], {{
-                radius: 11,
-                color: "white",
-                weight: 2,
-                fillColor: riskColour(p.final_risk_score),
-                fillOpacity: 0.96
-            }}).addTo(map).bindPopup(
-                "<b>" + p.place + "</b><br>" +
-                "Postcode prefix: " + p.postcode_prefix + "<br>" +
-                "IoD/IMD score: " + p.imd_score + "<br>" +
-                "Social vulnerability: " + p.social_vulnerability + "<br>" +
-                "Wind: " + Math.round(p.wind_speed_10m * 10) / 10 + " km/h<br>" +
-                "Risk: " + p.final_risk_score + "<br>" +
-                "Resilience: " + p.resilience_index + "<br>" +
-                "ENS: " + p.energy_not_supplied_mw + " MW<br>" +
-                "Financial loss: £" + Math.round(p.total_financial_loss_gbp).toLocaleString()
-            );
-        }});
-
-        data.outages.forEach(o => {{
-            L.marker([o.latitude, o.longitude]).addTo(map).bindPopup(
-                "<b>Northern Powergrid outage</b><br>" +
-                "Reference: " + o.outage_reference + "<br>" +
-                "Status: " + o.outage_status + "<br>" +
-                "Postcode: " + o.postcode_label + "<br>" +
-                "Customers affected: " + o.affected_customers + "<br>" +
-                "Restore: " + o.estimated_restore
-            );
-        }});
-
-        setTimeout(() => map.invalidateSize(), 300);
-    }});
-    </script>
-    """
-
-
-def bbc_hazard_script(map_id: str, canvas_id: str) -> str:
-    return f"""
-    <script>
-    document.addEventListener("DOMContentLoaded", async function() {{
-        const response = await fetch("/api/bbc_frames" + window.location.search);
-        const data = await response.json();
-
-        const centre = data.center;
-
-        const map = L.map("{map_id}", {{
-            zoomControl: true,
-            attributionControl: false,
-            preferCanvas: true,
-            dragging: true,
-            scrollWheelZoom: true
-        }}).setView([centre.lat, centre.lon], centre.zoom);
-
-        // Broadcast/weather-chart style dark base: strong sea-land contrast.
-        L.tileLayer("https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}.png", {{
-            maxZoom: 19,
-            opacity: 0.90
-        }}).addTo(map);
-
-        const labelLayer = L.layerGroup().addTo(map);
-        const postcodeLayer = L.layerGroup().addTo(map);
-        const outageLayer = L.layerGroup().addTo(map);
-
-        const weatherCanvas = document.getElementById("{canvas_id}");
-        const pressureCanvas = document.getElementById("q1PressureCanvas");
-        const frontCanvas = document.getElementById("q1FrontCanvas");
-
-        const wctx = weatherCanvas.getContext("2d");
-        const pctx = pressureCanvas.getContext("2d");
-        const fctx = frontCanvas.getContext("2d");
-
-        const range = document.getElementById("frameRange");
-        const dayLabel = document.getElementById("q1DayLabel");
-        const hourLabel = document.getElementById("q1HourLabel");
-        const conditionLabel = document.getElementById("q1ConditionLabel");
-
-        const opacitySlider = document.getElementById("weatherOpacity");
-        const rainToggle = document.getElementById("rainLayerToggle");
-        const cloudToggle = document.getElementById("cloudLayerToggle");
-        const windToggle = document.getElementById("windLayerToggle");
-        const isobarToggle = document.getElementById("isobarLayerToggle");
-        const lightningToggle = document.getElementById("lightningLayerToggle");
-
-        let currentFrame = null;
-        let frameIndex = 0;
-        let playing = false;
-        let timer = null;
-        let lastT = performance.now();
-        let lightningFlash = 0;
-
-        let rainCells = [];
-        let rainBands = [];
-        let cloudShields = [];
-        let windArrows = [];
-        let vortices = [];
-
-        function resizeCanvases() {{
-            const container = document.getElementById("q1Scene");
-            const rect = container.getBoundingClientRect();
-            const dpr = window.devicePixelRatio || 1;
-
-            [weatherCanvas, pressureCanvas, frontCanvas].forEach(c => {{
-                c.width = Math.max(1, Math.floor(rect.width * dpr));
-                c.height = Math.max(1, Math.floor(rect.height * dpr));
-                c.style.width = rect.width + "px";
-                c.style.height = rect.height + "px";
-            }});
-
-            wctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-            pctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-            fctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-            weatherCanvas._w = rect.width;
-            weatherCanvas._h = rect.height;
-        }}
-
-        function avg(key) {{
-            if (!currentFrame || !currentFrame.cells || currentFrame.cells.length === 0) return 0;
-            let total = 0;
-            currentFrame.cells.forEach(c => total += Number(c[key] || 0));
-            return total / currentFrame.cells.length;
-        }}
-
-        function pointFor(c) {{
-            return map.latLngToContainerPoint([c.lat, c.lon]);
-        }}
-
-        function nearestCell(x, y) {{
-            if (!currentFrame || !currentFrame.cells) return null;
-            let best = null;
-            let bestD = Infinity;
-            currentFrame.cells.forEach(c => {{
-                const p = pointFor(c);
-                const dx = p.x - x;
-                const dy = p.y - y;
-                const d = dx * dx + dy * dy;
-                if (d < bestD) {{
-                    bestD = d;
-                    best = c;
-                }}
-            }});
-            return best;
-        }}
-
-        function precipColour(rain, risk, alpha) {{
-            if (risk >= 86 || rain >= 8.0) return "rgba(168,85,247," + alpha + ")";
-            if (risk >= 76 || rain >= 5.7) return "rgba(239,68,68," + alpha + ")";
-            if (risk >= 63 || rain >= 3.7) return "rgba(249,115,22," + alpha + ")";
-            if (risk >= 50 || rain >= 2.2) return "rgba(234,179,8," + alpha + ")";
-            if (risk >= 35 || rain >= 0.9) return "rgba(34,197,94," + alpha + ")";
-            return "rgba(59,130,246," + alpha + ")";
-        }}
-
-        function riskSolid(v) {{
-            if (v >= 86) return "#a855f7";
-            if (v >= 76) return "#ef4444";
-            if (v >= 63) return "#f97316";
-            if (v >= 50) return "#eab308";
-            if (v >= 35) return "#22c55e";
-            return "#3b82f6";
-        }}
-
-        function drawEllipse(ctx, x, y, rx, ry, fillStyle, strokeStyle, lw) {{
-            ctx.save();
-            ctx.beginPath();
-            ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
-            ctx.fillStyle = fillStyle;
-            ctx.fill();
-            if (strokeStyle) {{
-                ctx.strokeStyle = strokeStyle;
-                ctx.lineWidth = lw || 1;
-                ctx.stroke();
-            }}
-            ctx.restore();
-        }}
-
-        function initWeather() {{
-            resizeCanvases();
-
-            const W = weatherCanvas._w || 1180;
-            const H = weatherCanvas._h || 760;
-            const mode = data.hazard_mode;
-
-            rainCells = [];
-            rainBands = [];
-            cloudShields = [];
-            windArrows = [];
-            vortices = [];
-
-            const rainBandCount = mode === "storm" ? 42 : mode === "rain" ? 35 : mode === "wind" ? 22 : 18;
-            for (let i = 0; i < rainBandCount; i++) {{
-                rainBands.push({{
-                    x: -W * 0.45 + Math.random() * W * 1.75,
-                    y: -H * 0.12 + Math.random() * H * 1.18,
-                    rx: 65 + Math.random() * 250,
-                    ry: 20 + Math.random() * 95,
-                    speed: 0.16 + Math.random() * 0.72,
-                    alpha: 0.09 + Math.random() * 0.24,
-                    phase: Math.random() * Math.PI * 2,
-                    bias: Math.random(),
-                    rotate: -0.35 + Math.random() * 0.7
-                }});
-            }}
-
-            const cloudCount = mode === "storm" ? 22 : mode === "rain" ? 18 : mode === "wind" ? 14 : 10;
-            for (let i = 0; i < cloudCount; i++) {{
-                cloudShields.push({{
-                    x: -W * 0.55 + Math.random() * W * 1.95,
-                    y: -H * 0.10 + Math.random() * H * 1.15,
-                    rx: 150 + Math.random() * 420,
-                    ry: 42 + Math.random() * 125,
-                    speed: 0.08 + Math.random() * 0.34,
-                    alpha: 0.055 + Math.random() * 0.12,
-                    phase: Math.random() * Math.PI * 2,
-                    rotate: -0.25 + Math.random() * 0.5
-                }});
-            }}
-
-            const arrowCount = mode === "storm" ? 125 : mode === "wind" ? 105 : mode === "rain" ? 74 : 60;
-            for (let i = 0; i < arrowCount; i++) {{
-                windArrows.push({{
-                    x: Math.random() * W,
-                    y: Math.random() * H,
-                    len: 28 + Math.random() * 70,
-                    speed: 0.50 + Math.random() * 1.50,
-                    alpha: 0.35 + Math.random() * 0.38,
-                    width: 1.4 + Math.random() * 2.6,
-                    phase: Math.random() * Math.PI * 2,
-                    curve: Math.random() * 0.8
-                }});
-            }}
-
-            // Cyclonic spiral centres, like WXCharts storm systems.
-            const vortexCount = mode === "storm" ? 3 : mode === "rain" ? 2 : 1;
-            for (let i = 0; i < vortexCount; i++) {{
-                vortices.push({{
-                    x: W * (0.28 + Math.random() * 0.48),
-                    y: H * (0.25 + Math.random() * 0.52),
-                    radius: 95 + Math.random() * 180,
-                    strength: 0.35 + Math.random() * 0.65,
-                    speed: 0.05 + Math.random() * 0.12,
-                    phase: Math.random() * Math.PI * 2
-                }});
-            }}
-        }}
-
-        function drawPressureAndFronts(W, H, t) {{
-            pctx.clearRect(0, 0, W, H);
-            fctx.clearRect(0, 0, W, H);
-
-            if (isobarToggle && isobarToggle.checked) {{
-                pctx.save();
-                pctx.globalAlpha = 0.60;
-                pctx.strokeStyle = "rgba(255,255,255,0.56)";
-                pctx.lineWidth = 1.6;
-
-                // Multiple contour families.
-                for (let family = 0; family < 2; family++) {{
-                    const cx = W * (family === 0 ? 0.27 : 0.72) + Math.sin(t / 6200 + family) * 28;
-                    const cy = H * (family === 0 ? 0.55 : 0.36) + Math.cos(t / 5300 + family) * 22;
-
-                    for (let k = 0; k < 8; k++) {{
-                        const rx = 90 + k * 42 + family * 20;
-                        const ry = 50 + k * 28;
-                        pctx.beginPath();
-                        pctx.ellipse(cx, cy, rx, ry, -0.38 + family * 0.65, 0, Math.PI * 2);
-                        pctx.stroke();
-                    }}
-                }}
-
-                // Long sweeping isobars.
-                pctx.lineWidth = 1.2;
-                for (let k = 0; k < 7; k++) {{
-                    pctx.beginPath();
-                    for (let x = -70; x <= W + 80; x += 18) {{
-                        const y = H * 0.24 + k * 78 + Math.sin((x + t * 0.018) / 125 + k * 0.55) * (26 + k * 2);
-                        if (x === -70) pctx.moveTo(x, y);
-                        else pctx.lineTo(x, y);
-                    }}
-                    pctx.stroke();
-                }}
-
-                pctx.restore();
-            }}
-
-            // Front line with red semicircles and blue triangles.
-            fctx.save();
-            fctx.lineWidth = 2.4;
-            fctx.strokeStyle = "rgba(255,255,255,0.76)";
-            fctx.beginPath();
-
-            const baseY = H * 0.60;
-            for (let x = -60; x <= W + 70; x += 22) {{
-                const y = baseY + Math.sin((x + t * 0.025) / 118) * 42;
-                if (x === -60) fctx.moveTo(x, y);
-                else fctx.lineTo(x, y);
-            }}
-            fctx.stroke();
-
-            for (let x = 10; x < W; x += 74) {{
-                const y = baseY + Math.sin((x + t * 0.025) / 118) * 42;
-
-                fctx.fillStyle = "rgba(59,130,246,0.88)";
-                fctx.beginPath();
-                fctx.moveTo(x, y);
-                fctx.lineTo(x + 19, y + 16);
-                fctx.lineTo(x - 8, y + 18);
-                fctx.closePath();
-                fctx.fill();
-
-                fctx.fillStyle = "rgba(239,68,68,0.88)";
-                fctx.beginPath();
-                fctx.arc(x + 38, y - 1, 10, Math.PI, 0);
-                fctx.fill();
-            }}
-            fctx.restore();
-        }}
-
-        function drawClouds(W, H, t, dt) {{
-            if (!cloudToggle || !cloudToggle.checked) return;
-
-            cloudShields.forEach(c => {{
-                c.x += c.speed * dt * 0.05;
-                c.y += Math.sin(t / 2500 + c.phase) * 0.035 * dt;
-
-                if (c.x - c.rx > W + 160) {{
-                    c.x = -c.rx - 180;
-                    c.y = -H * 0.10 + Math.random() * H * 1.15;
-                }}
-
-                wctx.save();
-                wctx.translate(c.x, c.y);
-                wctx.rotate(c.rotate);
-
-                // Shadow then cloud, broad and soft.
-                let shadow = wctx.createRadialGradient(22, 35, 0, 22, 35, c.rx);
-                shadow.addColorStop(0, "rgba(0,0,0," + c.alpha * 0.36 + ")");
-                shadow.addColorStop(1, "rgba(0,0,0,0)");
-                drawEllipse(wctx, 22, 35, c.rx * 0.95, c.ry * 0.85, shadow);
-
-                let cloud = wctx.createRadialGradient(0, 0, 0, 0, 0, c.rx);
-                cloud.addColorStop(0, "rgba(255,255,255," + c.alpha + ")");
-                cloud.addColorStop(0.40, "rgba(220,230,235," + c.alpha * 0.72 + ")");
-                cloud.addColorStop(0.78, "rgba(160,176,188," + c.alpha * 0.30 + ")");
-                cloud.addColorStop(1, "rgba(160,176,188,0)");
-                drawEllipse(wctx, 0, 0, c.rx, c.ry, cloud);
-
-                wctx.restore();
-            }});
-        }}
-
-        function drawPrecipitation(W, H, t, dt) {{
-            if (!rainToggle || !rainToggle.checked || !currentFrame) return;
-
-            const opacity = Number(opacitySlider ? opacitySlider.value : 0.76);
-            const mode = data.hazard_mode;
-            const movement = mode === "storm" ? 1.55 : mode === "rain" ? 1.18 : 0.74;
-            const avgRain = avg("rain");
-            const avgRisk = avg("risk_score");
-
-            // Anchored precipitation over model cells.
-            currentFrame.cells.forEach((cell, idx) => {{
-                const p = pointFor(cell);
-                const rain = Number(cell.rain || 0);
-                const risk = Number(cell.risk_score || 0);
-                if (rain < 0.1 && risk < 30 && mode !== "storm" && mode !== "rain") return;
-
-                const pulse = 0.94 + 0.06 * Math.sin(t / 680 + idx);
-                const rx = (46 + rain * 28 + risk * 0.80) * pulse;
-                const ry = (21 + rain * 12 + risk * 0.34) * pulse;
-                const alpha = Math.min(0.62, (0.085 + rain * 0.065 + risk / 430) * opacity);
-
-                const grad = wctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, rx);
-                grad.addColorStop(0, precipColour(rain, risk, alpha));
-                grad.addColorStop(0.42, precipColour(rain, risk, alpha * 0.58));
-                grad.addColorStop(0.74, "rgba(59,130,246," + alpha * 0.20 + ")");
-                grad.addColorStop(1, "rgba(0,0,0,0)");
-
-                drawEllipse(wctx, p.x, p.y, rx, ry, grad);
-            }});
-
-            // Moving rain bands
-            rainBands.forEach((b, i) => {{
-                b.x += b.speed * movement * dt * 0.068;
-                b.y += Math.sin(t / 1600 + b.phase) * 0.055 * dt;
-
-                if (b.x - b.rx > W + 150) {{
-                    b.x = -b.rx - 170;
-                    b.y = -H * 0.12 + Math.random() * H * 1.18;
-                }}
-
-                const syntheticRain = avgRain + b.bias * 5.0;
-                const syntheticRisk = avgRisk + b.bias * 45.0;
-                const alpha = Math.min(0.55, b.alpha * (0.65 + avgRain / 3.8 + avgRisk / 190) * opacity);
-
-                wctx.save();
-                wctx.translate(b.x, b.y);
-                wctx.rotate(b.rotate);
-
-                const grad = wctx.createRadialGradient(0, 0, 0, 0, 0, b.rx);
-                grad.addColorStop(0, precipColour(syntheticRain, syntheticRisk, alpha));
-                grad.addColorStop(0.46, precipColour(syntheticRain, syntheticRisk, alpha * 0.54));
-                grad.addColorStop(0.80, "rgba(37,99,235," + alpha * 0.18 + ")");
-                grad.addColorStop(1, "rgba(0,0,0,0)");
-
-                drawEllipse(wctx, 0, 0, b.rx, b.ry, grad);
-
-                // Embedded heavier core spots like WXCharts.
-                if (b.bias > 0.58) {{
-                    const core = wctx.createRadialGradient(0, 0, 0, 0, 0, b.rx * 0.30);
-                    core.addColorStop(0, precipColour(syntheticRain + 2.0, syntheticRisk + 20, alpha * 0.90));
-                    core.addColorStop(1, "rgba(0,0,0,0)");
-                    drawEllipse(wctx, 0, 0, b.rx * 0.32, b.ry * 0.46, core);
-                }}
-
-                wctx.restore();
-            }});
-
-            // Spiral precipitation around vortices.
-            vortices.forEach(v => {{
-                v.phase += v.speed * dt * 0.01;
-                for (let arm = 0; arm < 4; arm++) {{
-                    for (let j = 0; j < 28; j++) {{
-                        const theta = v.phase + arm * Math.PI / 2 + j * 0.18;
-                        const r = 18 + j * (v.radius / 28);
-                        const x = v.x + Math.cos(theta) * r;
-                        const y = v.y + Math.sin(theta) * r * 0.60;
-                        const a = Math.max(0, (1 - j / 30) * 0.16 * opacity * v.strength);
-                        const col = precipColour(avgRain + 3, avgRisk + 30, a);
-                        drawEllipse(wctx, x, y, 22 + j * 1.0, 8 + j * 0.35, col);
-                    }}
-                }}
-            }});
-        }}
-
-        function drawWindArrows(W, H, t, dt) {{
-            if (!windToggle || !windToggle.checked) return;
-
-            const mode = data.hazard_mode;
-            const mult = mode === "storm" ? 1.65 : mode === "wind" ? 1.38 : mode === "rain" ? 0.92 : 0.72;
-
-            windArrows.forEach(a => {{
-                const local = nearestCell(a.x, a.y);
-                const w = local ? Number(local.wind_speed || 9) : avg("wind_speed");
-                const intensity = Math.min(w / 42, 1.55);
-
-                // Vortex influence for curved arrows
-                let angle = -0.24 + Math.sin(t / 1800 + a.phase) * 0.12;
-                vortices.forEach(v => {{
-                    const dx = a.x - v.x;
-                    const dy = a.y - v.y;
-                    const d = Math.sqrt(dx*dx + dy*dy);
-                    if (d < v.radius * 2.1) {{
-                        angle += Math.atan2(dy, dx) * 0.10 * v.strength;
-                    }}
-                }});
-
-                const len = a.len * (0.74 + intensity * 0.58);
-                const x0 = a.x - Math.cos(angle) * len;
-                const y0 = a.y - Math.sin(angle) * len;
-                const alpha = Math.min(0.86, a.alpha + intensity * 0.20);
-
-                wctx.save();
-                wctx.strokeStyle = "rgba(255,255,255," + alpha + ")";
-                wctx.fillStyle = "rgba(255,255,255," + alpha + ")";
-                wctx.lineWidth = a.width;
-                wctx.lineCap = "round";
-
-                wctx.beginPath();
-                wctx.moveTo(x0, y0);
-                wctx.quadraticCurveTo(
-                    (x0 + a.x) / 2,
-                    (y0 + a.y) / 2 + Math.sin(t / 540 + a.phase) * 5,
-                    a.x,
-                    a.y
-                );
-                wctx.stroke();
-
-                const head = 10 + intensity * 7;
-                const bx = a.x - Math.cos(angle) * head;
-                const by = a.y - Math.sin(angle) * head;
-                const nx = -Math.sin(angle);
-                const ny = Math.cos(angle);
-
-                wctx.beginPath();
-                wctx.moveTo(a.x, a.y);
-                wctx.lineTo(bx + nx * head * 0.42, by + ny * head * 0.42);
-                wctx.lineTo(bx - nx * head * 0.42, by - ny * head * 0.42);
-                wctx.closePath();
-                wctx.fill();
-                wctx.restore();
-
-                a.x += Math.cos(angle) * a.speed * mult * (0.66 + intensity) * dt * 0.083;
-                a.y += Math.sin(angle) * a.speed * mult * (0.66 + intensity) * dt * 0.083;
-
-                if (a.x > W + 115 || a.y < -85 || a.y > H + 85) {{
-                    a.x = -115;
-                    a.y = Math.random() * H;
-                    a.phase = Math.random() * Math.PI * 2;
-                }}
-            }});
-        }}
-
-        function drawLightning(W, H) {{
-            if (!lightningToggle || !lightningToggle.checked || data.hazard_mode !== "storm") return;
-
-            if (Math.random() < 0.006) lightningFlash = 6;
-
-            if (lightningFlash > 0) {{
-                wctx.fillStyle = "rgba(255,255,255," + (0.05 + lightningFlash * 0.012) + ")";
-                wctx.fillRect(0, 0, W, H);
-
-                for (let bolt = 0; bolt < 2; bolt++) {{
-                    wctx.strokeStyle = "rgba(255,255,255,0.64)";
-                    wctx.lineWidth = 2.1;
-                    wctx.beginPath();
-                    let x = W * (0.15 + Math.random() * 0.75);
-                    let y = 0;
-                    wctx.moveTo(x, y);
-                    for (let i = 0; i < 6; i++) {{
-                        x += -35 + Math.random() * 70;
-                        y += 34 + Math.random() * 62;
-                        wctx.lineTo(x, y);
-                    }}
-                    wctx.stroke();
-                }}
-
-                lightningFlash -= 1;
-            }}
-        }}
-
-        function drawHUD(W, H) {{
-            wctx.save();
-            wctx.fillStyle = "rgba(2,6,23,0.58)";
-            wctx.strokeStyle = "rgba(255,255,255,0.18)";
-            wctx.lineWidth = 1;
-            wctx.beginPath();
-            wctx.roundRect(18, H - 92, 430, 70, 14);
-            wctx.fill();
-            wctx.stroke();
-
-            wctx.fillStyle = "rgba(255,255,255,0.96)";
-            wctx.font = "700 13px Segoe UI, Arial";
-            wctx.fillText("Q1-style forecast simulation", 34, H - 64);
-
-            wctx.font = "12px Segoe UI, Arial";
-            wctx.fillStyle = "rgba(219,234,254,0.96)";
-            wctx.fillText("WXCharts-style precipitation · BBC-style arrows · isobars/fronts", 34, H - 42);
-            wctx.fillText("Avg wind " + avg("wind_speed").toFixed(1) + " km/h · Avg rain " + avg("rain").toFixed(1) + " mm · Risk " + avg("risk_score").toFixed(1), 34, H - 24);
-            wctx.restore();
-        }}
-
-        function animate(t) {{
-            if (!currentFrame) {{
-                requestAnimationFrame(animate);
-                return;
-            }}
-
-            const dt = Math.min(34, t - lastT);
-            lastT = t;
-
-            const W = weatherCanvas._w || weatherCanvas.clientWidth || 1180;
-            const H = weatherCanvas._h || weatherCanvas.clientHeight || 760;
-
-            wctx.clearRect(0, 0, W, H);
-
-            // Light atmospheric wash; map remains visible.
-            wctx.fillStyle = data.hazard_mode === "storm" ? "rgba(5,12,24,0.045)" : "rgba(5,15,28,0.025)";
-            wctx.fillRect(0, 0, W, H);
-
-            drawPressureAndFronts(W, H, t);
-            drawClouds(W, H, t, dt);
-            drawPrecipitation(W, H, t, dt);
-            drawWindArrows(W, H, t, dt);
-            drawLightning(W, H);
-            drawHUD(W, H);
-
-            requestAnimationFrame(animate);
-        }}
-
-        function renderFrame(idx) {{
-            currentFrame = data.frames[idx];
-            frameIndex = idx;
-            range.value = idx;
-
-            dayLabel.textContent = "FRIDAY";
-            hourLabel.textContent = String(currentFrame.label).replace("+", "");
-            conditionLabel.textContent = data.scenario + " · " + data.hazard_mode;
-
-            // Progress storm fields with timeline.
-            rainBands.forEach((b, i) => b.x += 30 + i * 1.8);
-            cloudShields.forEach((c, i) => c.x += 14 + i * 0.6);
-            vortices.forEach(v => v.x += 8);
-        }}
-
-        // City labels
-        data.places.forEach(p => {{
-            const label = L.divIcon({{
-                className: "",
-                html: "<div class='city-label-bbc'>" + p.place + "</div>",
-                iconSize: [130, 30],
-                iconAnchor: [0, 14]
-            }});
-            L.marker([p.lat, p.lon], {{ icon: label }}).addTo(labelLayer).bindPopup(
-                "<b>" + p.place + "</b><br>" +
-                "Risk: " + p.final_risk_score + "<br>" +
-                "Resilience: " + p.resilience_index + "<br>" +
-                "IoD/IMD: " + p.imd_score + "<br>" +
-                "Financial loss: £" + Math.round(p.total_financial_loss_gbp).toLocaleString()
-            );
-        }});
-
-        data.outages.forEach(o => {{
-            L.circleMarker([o.latitude, o.longitude], {{
-                radius: 5,
-                color: "white",
-                weight: 1,
-                fillColor: "#ef4444",
-                fillOpacity: 0.95
-            }}).addTo(outageLayer).bindPopup(
-                "<b>Outage</b><br>" +
-                "Postcode: " + o.postcode_label + "<br>" +
-                "Customers: " + o.affected_customers
-            );
-        }});
-
-        // Postcode resilience layer from dedicated endpoint
-        fetch("/api/postcode_resilience" + window.location.search)
-            .then(r => r.json())
-            .then(pcData => {{
-                pcData.postcodes.forEach(p => {{
-                    const col = p.resilience_score >= 80 ? "#22c55e" :
-                                p.resilience_score >= 60 ? "#38bdf8" :
-                                p.resilience_score >= 40 ? "#eab308" : "#ef4444";
-
-                    L.circleMarker([p.lat, p.lon], {{
-                        radius: 5 + Math.min(7, p.recommendation_score / 14),
-                        color: "white",
-                        weight: 1.2,
-                        fillColor: col,
-                        fillOpacity: 0.78
-                    }}).addTo(postcodeLayer).bindPopup(
-                        "<b>Postcode: " + p.postcode + "</b><br>" +
-                        "Resilience: " + p.resilience_score + "<br>" +
-                        "Risk: " + p.risk_score + "<br>" +
-                        "Priority: " + p.investment_priority + "<br>" +
-                        "Financial loss: £" + Math.round(p.financial_loss_gbp).toLocaleString()
-                    );
-                }});
-            }});
-
-        window.playBBC = function() {{
-            if (playing) return;
-            playing = true;
-            timer = setInterval(() => {{
-                frameIndex = (frameIndex + 1) % data.frames.length;
-                renderFrame(frameIndex);
-            }}, 950);
-        }};
-
-        window.pauseBBC = function() {{
-            playing = false;
-            if (timer) clearInterval(timer);
-        }};
-
-        window.scrubBBC = function(value) {{
-            renderFrame(parseInt(value));
-        }};
-
-        window.reseedWeather = function() {{
-            initWeather();
-        }};
-
-        [opacitySlider, rainToggle, cloudToggle, windToggle, isobarToggle, lightningToggle].forEach(el => {{
-            if (el) el.addEventListener("input", function() {{}});
-            if (el) el.addEventListener("change", function() {{}});
-        }});
-
-        range.max = data.frames.length - 1;
-        range.value = 0;
-
-        map.on("move zoom resize", function() {{
-            resizeCanvases();
-        }});
-
-        window.addEventListener("resize", function() {{
-            resizeCanvases();
-            map.invalidateSize();
-        }});
-
-        resizeCanvases();
-        currentFrame = data.frames[0];
-        initWeather();
-        renderFrame(0);
-
-        setTimeout(() => {{
-            map.invalidateSize();
-            resizeCanvases();
-        }}, 300);
-
-        requestAnimationFrame(animate);
-
-        setTimeout(() => {{
-            window.playBBC();
-        }}, 800);
-    }});
-    </script>
-    """
-
-
-def nasa_storyboard_script(prefix: str) -> str:
-    return f"""
-    <script>
-    document.addEventListener("DOMContentLoaded", async function() {{
-        const response = await fetch("/api/data" + window.location.search);
-        const data = await response.json();
-        const centre = data.center;
-
-        const phases = [
-            ["{prefix}0", "Pre-event", 0.55],
-            ["{prefix}1", "Disturbance", 0.85],
-            ["{prefix}2", "Peak failure", 1.20],
-            ["{prefix}3", "Recovery", 0.70]
-        ];
-
-        function colour(v) {{
-            if (v >= 75) return "#ef4444";
-            if (v >= 55) return "#f97316";
-            if (v >= 35) return "#eab308";
-            return "#22c55e";
-        }}
-
-        phases.forEach(item => {{
-            const mapId = item[0];
-            const phase = item[1];
-            const mult = item[2];
-
-            const map = L.map(mapId, {{
-                zoomControl: false,
-                attributionControl: false
-            }}).setView([centre.lat, centre.lon], centre.zoom);
-
-            L.tileLayer("https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png", {{
-                opacity: 0.25
-            }}).addTo(map);
-
-            L.tileLayer(data.nasa_tile, {{
-                opacity: 0.82,
-                attribution: "NASA GIBS"
-            }}).addTo(map);
-
-            data.places.forEach(p => {{
-                const risk = Math.min(100, p.final_risk_score * mult);
-                L.circleMarker([p.lat, p.lon], {{
-                    radius: 8,
-                    color: "white",
-                    weight: 1.5,
-                    fillColor: colour(risk),
-                    fillOpacity: 0.95
-                }}).addTo(map).bindPopup(
-                    "<b>" + p.place + "</b><br>" +
-                    phase + "<br>Risk: " + Math.round(risk * 10) / 10
-                );
-
-                L.circle([p.lat, p.lon], {{
-                    radius: 2500 + risk * 45,
-                    color: "#38bdf8",
-                    fillColor: "#38bdf8",
-                    fillOpacity: 0.08,
-                    weight: 1
-                }}).addTo(map);
-            }});
-
-            if (phase !== "Pre-event") {{
-                data.outages.forEach(o => {{
-                    L.marker([o.latitude, o.longitude]).addTo(map).bindPopup(
-                        "<b>Outage</b><br>Postcode: " + o.postcode_label
-                    );
-                }});
-            }}
-
-            setTimeout(() => map.invalidateSize(), 300);
-        }});
-    }});
-    </script>
-    """
-
 
 
 # =============================================================================
@@ -3566,24 +1286,8 @@ def nasa_storyboard_script(prefix: str) -> str:
 # =============================================================================
 
 def build_postcode_resilience(places: pd.DataFrame, outages: pd.DataFrame) -> pd.DataFrame:
-    """
-    Produces postcode-level resilience estimates.
-
-    This uses available postcode labels from Northern Powergrid outage records.
-    If live postcode labels are sparse, it also includes the configured city/town
-    postcode prefixes so the page is never empty.
-
-    In a full production system, replace this with a national postcode centroid
-    or postcode boundary dataset. This prototype computes resilience using:
-    - nearest place-level digital twin risk
-    - nearby outage concentration
-    - affected customers
-    - social vulnerability
-    - ENS / financial loss proxy
-    """
     rows = []
 
-    # Build rows from live outage postcode labels
     if outages is not None and not outages.empty:
         grouped = (
             outages.groupby("postcode_label")
@@ -3655,7 +1359,6 @@ def build_postcode_resilience(places: pd.DataFrame, outages: pd.DataFrame) -> pd
                 "recommendation_score": 0.0,
             })
 
-    # Ensure all configured postcode prefixes appear
     existing = {str(r["postcode"]).upper() for r in rows}
     for _, p in places.iterrows():
         pc = str(p.get("postcode_prefix", "Unknown"))
@@ -3756,7 +1459,6 @@ def build_investment_recommendations(places: pd.DataFrame, outages: pd.DataFrame
     pc["investment_category"] = pc.apply(lambda r: investment_category_for_row(r.to_dict()), axis=1)
     pc["recommended_action"] = pc.apply(lambda r: investment_action_for_row(r.to_dict()), axis=1)
 
-    # Very transparent indicative cost model
     pc["indicative_investment_cost_gbp"] = (
         120000
         + pc["recommendation_score"] * 8500
@@ -3764,752 +1466,416 @@ def build_investment_recommendations(places: pd.DataFrame, outages: pd.DataFrame
         + np.clip(pc["energy_not_supplied_mw"], 0, 1000) * 260
     ).round(0)
 
-    pc["benefit_cost_note"] = (
-        "High avoided-loss potential"
-    )
+    pc["benefit_cost_note"] = "High avoided-loss potential"
 
     return pc.sort_values("recommendation_score", ascending=False).reset_index(drop=True)
 
+
 # =============================================================================
-# ROUTES
+# VISUAL HELPERS
 # =============================================================================
 
-@app.route("/")
-def index():
-    region, scenario, layer, page, mc = get_controls()
-    places, outages, grid = get_data(region, scenario, mc)
-
-    if page == "simple":
-        return page_simple(region, scenario, layer, places, outages, grid)
-
-    if page == "bbc":
-        return page_bbc(region, scenario, layer, places, outages, grid)
-
-    if page == "resilience":
-        return page_resilience(region, scenario, layer, places, outages, grid)
-
-    if page == "postcode":
-        return page_postcode(region, scenario, layer, places, outages, grid)
-
-    if page == "postcode_resilience":
-        return page_postcode_resilience(region, scenario, layer, places, outages, grid)
-
-    if page == "investment":
-        return page_investment(region, scenario, layer, places, outages, grid)
-
-    if page == "finance":
-        return page_finance(region, scenario, layer, places, outages, grid)
-
-    if page == "montecarlo":
-        return page_montecarlo(region, scenario, layer, places, outages, grid)
-
-    if page == "satellite":
-        return page_satellite(region, scenario, layer, places, outages, grid)
-
-    if page == "data":
-        return page_data(region, scenario, layer, places, outages, grid)
-
-    return page_overview(region, scenario, layer, places, outages, grid)
+def risk_colour(score: float) -> List[int]:
+    score = safe_float(score)
+    if score >= 75:
+        return [239, 68, 68, 190]
+    if score >= 55:
+        return [249, 115, 22, 180]
+    if score >= 35:
+        return [234, 179, 8, 170]
+    return [34, 197, 94, 170]
 
 
-def page_overview(region, scenario, layer, places, outages, grid):
+def priority_colour(priority: str) -> List[int]:
+    if priority == "Priority 1":
+        return [239, 68, 68, 190]
+    if priority == "Priority 2":
+        return [249, 115, 22, 180]
+    if priority == "Priority 3":
+        return [234, 179, 8, 170]
+    return [34, 197, 94, 160]
+
+
+def add_colour_columns(places: pd.DataFrame, pc: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    places_map = places.copy()
+    places_map["color"] = places_map["final_risk_score"].apply(risk_colour)
+    places_map["radius"] = 6000 + places_map["final_risk_score"].clip(0, 100) * 120
+
+    pc_map = pc.copy()
+    if not pc_map.empty:
+        pc_map["color"] = pc_map["investment_priority"].apply(priority_colour)
+        pc_map["radius"] = 4000 + pc_map["recommendation_score"].clip(0, 100) * 110
+
+    return places_map, pc_map
+
+
+def render_pydeck_map(region: str, places: pd.DataFrame, outages: pd.DataFrame, pc: pd.DataFrame, map_mode: str) -> None:
+    try:
+        import pydeck as pdk
+    except Exception:
+        st.map(places.rename(columns={"lat": "latitude", "lon": "longitude"}))
+        return
+
+    places_map, pc_map = add_colour_columns(places, pc)
+
+    center = REGIONS[region]["center"]
+
+    layers = []
+
+    if map_mode in ["Risk", "All"]:
+        layers.append(
+            pdk.Layer(
+                "ScatterplotLayer",
+                data=places_map,
+                get_position="[lon, lat]",
+                get_fill_color="color",
+                get_radius="radius",
+                pickable=True,
+                opacity=0.80,
+            )
+        )
+
+    if map_mode in ["Postcode / Investment", "All"] and not pc_map.empty:
+        layers.append(
+            pdk.Layer(
+                "ScatterplotLayer",
+                data=pc_map,
+                get_position="[lon, lat]",
+                get_fill_color="color",
+                get_radius="radius",
+                pickable=True,
+                opacity=0.70,
+            )
+        )
+
+    if map_mode in ["Outages", "All"] and not outages.empty:
+        outages_map = outages.copy()
+        outages_map["color"] = [[255, 255, 255, 210]] * len(outages_map)
+        outages_map["radius"] = 4200 + pd.to_numeric(outages_map["affected_customers"], errors="coerce").fillna(0).clip(0, 1000) * 15
+        layers.append(
+            pdk.Layer(
+                "ScatterplotLayer",
+                data=outages_map,
+                get_position="[longitude, latitude]",
+                get_fill_color="color",
+                get_radius="radius",
+                pickable=True,
+                opacity=0.65,
+            )
+        )
+
+    tooltip = {
+        "html": """
+        <b>{place}{postcode}{outage_reference}</b><br/>
+        Risk: {final_risk_score}{risk_score}<br/>
+        Resilience: {resilience_index}{resilience_score}<br/>
+        Financial loss: £{total_financial_loss_gbp}{financial_loss_gbp}<br/>
+        Priority: {investment_priority}
+        """,
+        "style": {"backgroundColor": "rgba(15, 23, 42, 0.95)", "color": "white"},
+    }
+
+    view_state = pdk.ViewState(
+        latitude=center["lat"],
+        longitude=center["lon"],
+        zoom=center["zoom"] - 1,
+        pitch=35,
+    )
+
+    st.pydeck_chart(
+        pdk.Deck(
+            map_style="mapbox://styles/mapbox/dark-v10",
+            initial_view_state=view_state,
+            layers=layers,
+            tooltip=tooltip,
+        ),
+        use_container_width=True,
+    )
+
+
+def format_money_m(value: float) -> str:
+    return f"£{safe_float(value) / 1_000_000:.2f}m"
+
+
+def show_metric_cards(places: pd.DataFrame, pc: pd.DataFrame, scenario: str) -> None:
     avg_risk = round(float(places["final_risk_score"].mean()), 1)
     avg_res = round(float(places["resilience_index"].mean()), 1)
     avg_failure = round(float(places["failure_probability"].mean()) * 100, 1)
     total_ens = round(float(places["energy_not_supplied_mw"].sum()), 1)
-    total_loss = round(float(places["total_financial_loss_gbp"].sum()) / 1_000_000, 2)
-    avg_wind = round(float(places["wind_speed_10m"].mean()), 1)
-    avg_social = round(float(places["social_vulnerability"].mean()), 1)
+    total_loss = round(float(places["total_financial_loss_gbp"].sum()), 2)
+    p1 = 0 if pc.empty else int((pc["investment_priority"] == "Priority 1").sum())
+
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    c1.metric("Scenario", scenario)
+    c2.metric("Regional risk", avg_risk)
+    c3.metric("Resilience", f"{avg_res}/100")
+    c4.metric("Failure probability", f"{avg_failure}%")
+    c5.metric("ENS", f"{total_ens} MW")
+    c6.metric("Financial loss", format_money_m(total_loss))
+    st.caption(f"Priority 1 postcode areas: {p1}")
+
+
+# =============================================================================
+# STREAMLIT UI
+# =============================================================================
+
+def main() -> None:
+    st.markdown(
+        """
+        <style>
+        .block-container {padding-top: 1.2rem;}
+        .stMetric {background: rgba(15,23,42,0.04); border-radius: 14px; padding: 12px;}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.title("⚡ SAT-Guard Grid Digital Twin")
+    st.caption("North East & Yorkshire · weather, outage, deprivation, resilience, financial-loss and investment decision support")
+
+    with st.sidebar:
+        st.header("Controls")
+        region = st.selectbox("Region", list(REGIONS.keys()), index=0)
+        scenario = st.selectbox("Scenario", list(SCENARIOS.keys()), index=0)
+        mc_runs = st.slider("Monte Carlo runs", min_value=10, max_value=120, value=30, step=10)
+        map_mode = st.selectbox("Map layer", ["All", "Risk", "Postcode / Investment", "Outages"], index=0)
+
+        st.info(SCENARIOS[scenario]["description"])
+
+        run_model = st.button("Run / refresh model", type="primary")
+
+        st.divider()
+        st.caption("IoD2025 Excel files can be placed in the same folder or a data/ folder. If not found, fallback vulnerability proxies are used.")
+
+        if st.button("Clear Streamlit cache"):
+            st.cache_data.clear()
+            st.rerun()
+
+    if run_model:
+        st.cache_data.clear()
+
+    with st.spinner("Running digital twin model..."):
+        places, outages, grid = get_data_cached(region, scenario, mc_runs)
+        pc = build_postcode_resilience(places, outages)
+        rec = build_investment_recommendations(places, outages)
+
+    if places.empty:
+        st.error("No place-level model data could be generated.")
+        return
+
+    show_metric_cards(places, pc, scenario)
+
     imd_source = places.iloc[0].get("imd_dataset_summary", "Unknown") if not places.empty else "Unknown"
 
-    content = f"""
-    <div class="grid">
-        {metric_card("Mode", scenario, SCENARIOS[scenario]["description"])}
-        {metric_card("Regional Risk", str(avg_risk), "scenario-adjusted risk score")}
-        {metric_card("Resilience", f"{avg_res}/100", "higher is better")}
-        {metric_card("Financial Loss", f"£{total_loss}m", "estimated regional loss")}
-    </div>
-
-    <div class="grid">
-        {metric_card("ENS", f"{total_ens} MW", "energy not supplied")}
-        {metric_card("Failure Probability", f"{avg_failure}%", "mean predicted probability")}
-        {metric_card("Wind Speed", f"{avg_wind} km/h", "weather headline variable")}
-        {metric_card("Social Vulnerability", f"{avg_social}/100", "IoD2025/deprivation-aware")}
-    </div>
-
-    <div class="card">
-        <h2>IoD2025 / deprivation data source</h2>
-        <p style="color:#94a3b8;">{imd_source}</p>
-    </div>
-
-    <div class="grid-2">
-        <div class="card">
-            <h2>Regional intelligence</h2>
-            {places_table(places)}
-        </div>
-
-        <div class="card bbc-card">
-            <h2>BBC-style snapshot</h2>
-            <div class="metric-label">Headline hazard variable</div>
-            <div class="metric-value">🌬️ {avg_wind} km/h</div>
-            <div class="metric-note">Risk {avg_risk} · Resilience {avg_res} · ENS {total_ens} MW</div>
-            <hr style="border-color:rgba(148,163,184,0.18); margin:18px 0;">
-            <h3>Risk distribution</h3>
-            {chart_bars(places, "final_risk_score")}
-        </div>
-    </div>
-    """
-
-    return render_app(
-        "North East & Yorkshire Grid Digital Twin",
-        "Updated version using your IoD2025 deprivation datasets, improved financial loss model and BBC-style moving hazard animation.",
-        content,
-    )
-
-
-def page_simple(region, scenario, layer, places, outages, grid):
-    content = """
-    <div class="card">
-        <h2>Simple Map: Wind, Postcode and Outage Layer</h2>
-        <p style="color:#94a3b8;">
-            Wind cells, postcode outage markers, place markers and NASA overlay.
-        </p>
-        <div id="simpleMap" class="map"></div>
-    </div>
-    """
-
-    return render_app(
-        "Simple Map",
-        "Wind-speed map with postcode markers, Northern Powergrid outage popups and NASA overlay.",
-        content,
-        simple_map_script("simpleMap"),
-    )
-
-
-def page_bbc(region, scenario, layer, places, outages, grid):
-    hazard = SCENARIOS[scenario]["hazard_mode"]
-
-    content = f"""
-    <div class="card bbc-card">
-        <h2>Weather Simulation</h2>
-        <p style="color:#cbd5e1;">
-            Professional forecast-style view inspired by BBC Weather and WXCharts:
-            dark broadcast basemap, labelled cities, moving precipitation fields, spiral storm bands,
-            white wind arrows, isobars/fronts, lightning, time strip and postcode resilience markers.
-        </p>
-
-        <div id="q1Scene" class="q1-scene">
-            <div id="q1WeatherMap" class="q1-map"></div>
-            <canvas id="q1PressureCanvas" class="q1-pressure-canvas"></canvas>
-            <canvas id="q1WeatherCanvas" class="q1-weather-canvas"></canvas>
-            <canvas id="q1FrontCanvas" class="q1-front-canvas"></canvas>
-
-            <div class="q1-top-card">
-                <div class="q1-top-title">Forecast simulation and resilience overlay</div>
-                <div class="q1-top-sub">
-                    Scenario: {scenario}<br>
-                    Visual mode: {hazard}<br>
-                    Weather layers remain semi-transparent so investment and postcode markers can still be inspected.
-                </div>
-            </div>
-
-            <div class="q1-legend">
-                <strong>Precipitation / hazard intensity</strong>
-                <div class="q1-gradient"></div>
-                <div style="display:flex;justify-content:space-between;">
-                    <span>Light</span><span>Heavy</span><span>Extreme</span>
-                </div>
-                <hr style="border-color:rgba(255,255,255,.14);">
-                <span style="color:#22c55e;">●</span> resilient postcode&nbsp;&nbsp;
-                <span style="color:#ef4444;">●</span> fragile postcode
-            </div>
-
-            <div class="q1-brand">
-                <div class="q1-brand-blocks"><span>B</span><span>B</span><span>C</span></div>
-                <div class="q1-brand-word">WEATHER</div>
-            </div>
-
-            <div class="wx-watermark">Q1 GRID RESILIENCE WEATHER MODEL</div>
-
-            <div class="q1-time-strip">
-                <div class="q1-day" id="q1DayLabel">FRIDAY</div>
-                <div class="q1-hour" id="q1HourLabel">00h</div>
-            </div>
-
-            <div class="q1-controls">
-                <button onclick="playBBC()">▶ Play</button>
-                <button onclick="pauseBBC()">Ⅱ Pause</button>
-                <input id="frameRange" class="range" type="range" min="0" max="1" value="0" oninput="scrubBBC(this.value)">
-                <span class="chip" id="q1ConditionLabel">{hazard}</span>
-
-                <label class="q1-toggle"><input id="rainLayerToggle" type="checkbox" checked> rain</label>
-                <label class="q1-toggle"><input id="cloudLayerToggle" type="checkbox" checked> cloud</label>
-                <label class="q1-toggle"><input id="windLayerToggle" type="checkbox" checked> wind</label>
-                <label class="q1-toggle"><input id="isobarLayerToggle" type="checkbox" checked> isobars</label>
-                <label class="q1-toggle"><input id="lightningLayerToggle" type="checkbox" checked> lightning</label>
-
-                <label class="q1-toggle">
-                    opacity
-                    <input id="weatherOpacity" type="range" min="0.35" max="0.95" step="0.05" value="0.78">
-                </label>
-                <button onclick="reseedWeather()">refresh</button>
-            </div>
-        </div>
-    </div>
-    """
-
-    return render_app(
-        "Weather Simulation",
-        "Professional animated forecast map with precipitation, isobars, fronts, wind arrows, postcode resilience and investment context.",
-        content,
-        bbc_hazard_script("q1WeatherMap", "q1WeatherCanvas"),
-    )
-
-
-
-def page_resilience(region, scenario, layer, places, outages, grid):
-    rows = ""
-    for _, r in places.sort_values("resilience_index").iterrows():
-        rows += f"""
-        <tr>
-            <td><strong>{r['place']}</strong></td>
-            <td><span class="badge {r['resilience_label']}">{r['resilience_label']}</span></td>
-            <td>{round(r['resilience_index'],1)}</td>
-            <td>{round(r['imd_score'],1)}</td>
-            <td>{r['imd_match']}</td>
-            <td>{round(r['social_vulnerability'],1)}</td>
-            <td>{round(r['grid_failure_probability']*100,1)}%</td>
-            <td>{round(r['renewable_failure_probability']*100,1)}%</td>
-            <td>£{round(r['total_financial_loss_gbp']/1_000_000,2)}m</td>
-        </tr>
-        """
-
-    content = f"""
-    <div class="grid">
-        {metric_card("Mean Resilience", f"{round(places['resilience_index'].mean(),1)}/100", "higher is better")}
-        {metric_card("Lowest Resilience", f"{round(places['resilience_index'].min(),1)}", "priority location")}
-        {metric_card("Mean IoD/Social", f"{round(places['social_vulnerability'].mean(),1)}", "deprivation-aware")}
-        {metric_card("Mean Grid Failure", f"{round(places['grid_failure_probability'].mean()*100,1)}%", "risk + outages + ENS")}
-    </div>
-
-    <div class="card">
-        <h2>Resilience diagnostics using IoD2025 / deprivation</h2>
-        <table>
-            <tr>
-                <th>Place</th>
-                <th>Level</th>
-                <th>Index</th>
-                <th>IoD/IMD score</th>
-                <th>Dataset match</th>
-                <th>Social vulnerability</th>
-                <th>Grid failure</th>
-                <th>Renewable failure</th>
-                <th>Financial loss</th>
-            </tr>
-            {rows}
-        </table>
-    </div>
-    """
-
-    return render_app(
-        "Resilience Level",
-        "Resilience index with uploaded IoD2025 deprivation data, social vulnerability, grid failure, renewable failure and financial loss.",
-        content,
-    )
-
-
-def page_postcode(region, scenario, layer, places, outages, grid):
-    if outages.empty:
-        content = """
-        <div class="card">
-            <h2>Postcode Visuals</h2>
-            <div class="alert">No outage postcode data available.</div>
-        </div>
-        """
-        return render_app("Postcode Visuals", "Northern Powergrid postcode distribution.", content)
-
-    grouped = (
-        outages.groupby("postcode_label")
-        .agg(outages=("outage_reference", "count"), customers=("affected_customers", "sum"))
-        .reset_index()
-        .sort_values("outages", ascending=False)
-    )
-
-    rows = ""
-    chart = ""
-    max_count = max(1, int(grouped["outages"].max()))
-
-    for _, r in grouped.head(20).iterrows():
-        width = (r["outages"] / max_count) * 100
-        rows += f"""
-        <tr>
-            <td><strong>{r['postcode_label']}</strong></td>
-            <td>{int(r['outages'])}</td>
-            <td>{int(r['customers'])}</td>
-            <td><div class="bar"><div class="fill-risk" style="width:{width}%"></div></div></td>
-        </tr>
-        """
-
-        chart += f"""
-        <div class="chart-col">
-            <div class="chart-bar" style="height:{max(8, width*2.2)}px"></div>
-            <span>{r['postcode_label']}</span>
-        </div>
-        """
-
-    content = f"""
-    <div class="grid-2">
-        <div class="card">
-            <h2>Postcode outage ranking</h2>
-            <table>
-                <tr>
-                    <th>Postcode</th>
-                    <th>Outages</th>
-                    <th>Affected customers</th>
-                    <th>Intensity</th>
-                </tr>
-                {rows}
-            </table>
-        </div>
-
-        <div class="card">
-            <h2>Postcode visual intensity</h2>
-            <div class="chart">{chart}</div>
-            <div class="alert success">Postcode visuals are based on normalised Northern Powergrid records.</div>
-        </div>
-    </div>
-    """
-
-    return render_app("Postcode Visuals", "Postcode-level outage distribution and affected-customer intensity.", content)
-
-
-
-def postcode_resilience_map_script(map_id: str) -> str:
-    return f"""
-    <script>
-    document.addEventListener("DOMContentLoaded", async function() {{
-        const response = await fetch("/api/postcode_resilience" + window.location.search);
-        const data = await response.json();
-
-        const map = L.map("{map_id}").setView([data.center.lat, data.center.lon], data.center.zoom);
-
-        L.tileLayer("https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png", {{
-            maxZoom: 19,
-            attribution: "OpenStreetMap"
-        }}).addTo(map);
-
-        function colour(v) {{
-            if (v >= 80) return "#22c55e";
-            if (v >= 60) return "#38bdf8";
-            if (v >= 40) return "#eab308";
-            return "#ef4444";
-        }}
-
-        data.postcodes.forEach(p => {{
-            const radius = 2600 + Math.max(0, 100 - p.resilience_score) * 45;
-            L.circleMarker([p.lat, p.lon], {{
-                radius: 8 + Math.min(8, p.recommendation_score / 12),
-                color: "white",
-                weight: 2,
-                fillColor: colour(p.resilience_score),
-                fillOpacity: 0.93
-            }}).addTo(map).bindPopup(
-                "<b>Postcode: " + p.postcode + "</b><br>" +
-                "Nearest place: " + p.nearest_place + "<br>" +
-                "Resilience score: " + p.resilience_score + "<br>" +
-                "Risk score: " + p.risk_score + "<br>" +
-                "Priority: " + p.investment_priority + "<br>" +
-                "Recommendation score: " + p.recommendation_score + "<br>" +
-                "Financial loss: £" + Math.round(p.financial_loss_gbp).toLocaleString()
-            );
-
-            L.circle([p.lat, p.lon], {{
-                radius: radius,
-                color: colour(p.resilience_score),
-                fillColor: colour(p.resilience_score),
-                fillOpacity: 0.045,
-                weight: 1,
-                opacity: 0.55
-            }}).addTo(map);
-        }});
-
-        setTimeout(() => map.invalidateSize(), 300);
-    }});
-    </script>
-    """
-
-
-def page_postcode_resilience(region, scenario, layer, places, outages, grid):
-    pc = build_postcode_resilience(places, outages)
-
-    if pc.empty:
-        content = """
-        <div class="card">
-            <h2>Postcode-level Resilience Scores</h2>
-            <div class="alert">No postcode resilience data could be generated.</div>
-        </div>
-        """
-        return render_app("Postcode-level Resilience Scores", "Postcode-level resilience estimates.", content)
-
-    rows = ""
-    for _, r in pc.iterrows():
-        rows += f"""
-        <tr>
-            <td><strong>{r['postcode']}</strong></td>
-            <td>{r['nearest_place']}</td>
-            <td><span class="badge {r['resilience_label']}">{r['resilience_label']}</span></td>
-            <td>{round(r['resilience_score'],1)}</td>
-            <td>{round(r['risk_score'],1)}</td>
-            <td>{round(r['social_vulnerability'],1)}</td>
-            <td>{int(r['outage_records'])}</td>
-            <td>{round(r['energy_not_supplied_mw'],1)} MW</td>
-            <td>£{round(r['financial_loss_gbp']/1_000_000,2)}m</td>
-            <td>{r['investment_priority']}</td>
-        </tr>
-        """
-
-    content = f"""
-    <div class="grid">
-        {metric_card("Postcode Areas", str(len(pc)), "generated from live outage labels + configured prefixes")}
-        {metric_card("Lowest Resilience", str(round(pc['resilience_score'].min(),1)), "postcode-level")}
-        {metric_card("Highest Priority Score", str(round(pc['recommendation_score'].max(),1)), "investment urgency")}
-        {metric_card("Total Postcode Loss", f"£{round(pc['financial_loss_gbp'].sum()/1_000_000,2)}m", "estimated")}
-    </div>
-
-    <div class="card">
-        <h2>Postcode-level resilience map</h2>
-        <p style="color:#94a3b8;">
-            Each postcode marker has a resilience score, risk score, financial-loss estimate and investment priority.
-            For a production-grade map, this can be joined to a full UK postcode centroid or boundary dataset.
-        </p>
-        <div id="postcodeResilienceMap" class="map"></div>
-    </div>
-
-    <div class="card">
-        <h2>Postcode-level resilience scores</h2>
-        <table>
-            <tr>
-                <th>Postcode</th>
-                <th>Nearest place</th>
-                <th>Level</th>
-                <th>Resilience</th>
-                <th>Risk</th>
-                <th>Social vuln.</th>
-                <th>Outages</th>
-                <th>ENS</th>
-                <th>Financial loss</th>
-                <th>Priority</th>
-            </tr>
-            {rows}
-        </table>
-    </div>
-    """
-
-    return render_app(
-        "Postcode-level Resilience Scores",
-        "Postcode-level resilience, risk, financial loss and priority scoring.",
-        content,
-        postcode_resilience_map_script("postcodeResilienceMap"),
-    )
-
-
-def page_investment(region, scenario, layer, places, outages, grid):
-    rec = build_investment_recommendations(places, outages)
-
-    if rec.empty:
-        content = """
-        <div class="card">
-            <h2>Prioritised Investment Recommendations</h2>
-            <div class="alert">No investment recommendations could be generated.</div>
-        </div>
-        """
-        return render_app("Prioritised Investment Recommendations", "Investment ranking.", content)
-
-    rows = ""
-    for rank, (_, r) in enumerate(rec.iterrows(), start=1):
-        rows += f"""
-        <tr>
-            <td><strong>{rank}</strong></td>
-            <td><strong>{r['postcode']}</strong></td>
-            <td>{r['nearest_place']}</td>
-            <td><span class="badge {r['investment_priority'].replace(' ', '')}">{r['investment_priority']}</span></td>
-            <td>{round(r['recommendation_score'],1)}</td>
-            <td>{r['investment_category']}</td>
-            <td>{r['recommended_action']}</td>
-            <td>£{round(r['indicative_investment_cost_gbp']/1_000_000,2)}m</td>
-            <td>£{round(r['financial_loss_gbp']/1_000_000,2)}m</td>
-        </tr>
-        """
-
-    p1 = int((rec["investment_priority"] == "Priority 1").sum())
-    total_cost = round(rec["indicative_investment_cost_gbp"].sum() / 1_000_000, 2)
-    avoided_loss = round(rec["financial_loss_gbp"].sum() / 1_000_000, 2)
-
-    content = f"""
-    <div class="grid">
-        {metric_card("Priority 1 Areas", str(p1), "highest urgency")}
-        {metric_card("Top Score", str(round(rec['recommendation_score'].max(),1)), "postcode investment score")}
-        {metric_card("Indicative Programme Cost", f"£{total_cost}m", "transparent prototype estimate")}
-        {metric_card("Exposed Financial Loss", f"£{avoided_loss}m", "potential avoided-loss pool")}
-    </div>
-
-    <div class="card">
-        <h2>Prioritised investment recommendations</h2>
-        <p style="color:#94a3b8;">
-            Ranking combines risk, social vulnerability, low resilience, ENS, outage concentration and financial-loss exposure.
-            The action column translates the score into practical resilience investments.
-        </p>
-        <table>
-            <tr>
-                <th>Rank</th>
-                <th>Postcode</th>
-                <th>Nearest place</th>
-                <th>Priority</th>
-                <th>Score</th>
-                <th>Category</th>
-                <th>Recommended action</th>
-                <th>Indicative cost</th>
-                <th>Loss exposure</th>
-            </tr>
-            {rows}
-        </table>
-    </div>
-    """
-
-    return render_app(
-        "Prioritised Investment Recommendations",
-        "Ranked postcode-level investment actions based on resilience, risk, social vulnerability, ENS and financial-loss exposure.",
-        content,
-    )
-
-
-def page_finance(region, scenario, layer, places, outages, grid):
-    rows = ""
-    for _, r in places.sort_values("total_financial_loss_gbp", ascending=False).iterrows():
-        rows += f"""
-        <tr>
-            <td><strong>{r['place']}</strong></td>
-            <td>{round(r['energy_not_supplied_mw'],1)} MW</td>
-            <td>{round(r['ens_mwh'],1)} MWh</td>
-            <td>{round(r['estimated_duration_hours'],1)} h</td>
-            <td>£{round(r['voll_loss_gbp']/1_000_000,2)}m</td>
-            <td>£{round(r['customer_interruption_loss_gbp']/1_000_000,2)}m</td>
-            <td>£{round(r['business_disruption_loss_gbp']/1_000_000,2)}m</td>
-            <td>£{round(r['restoration_loss_gbp']/1_000_000,2)}m</td>
-            <td>£{round(r['critical_services_loss_gbp']/1_000_000,2)}m</td>
-            <td><strong>£{round(r['total_financial_loss_gbp']/1_000_000,2)}m</strong></td>
-        </tr>
-        """
-
-    total_loss = round(places["total_financial_loss_gbp"].sum() / 1_000_000, 2)
-    total_ens = round(places["ens_mwh"].sum(), 1)
-
-    content = f"""
-    <div class="grid">
-        {metric_card("Total Financial Loss", f"£{total_loss}m", "regional scenario estimate")}
-        {metric_card("ENS", f"{total_ens} MWh", "energy not supplied over duration")}
-        {metric_card("Largest Local Loss", f"£{round(places['total_financial_loss_gbp'].max()/1_000_000,2)}m", "highest local impact")}
-        {metric_card("MC P95 Loss", f"£{round(places['mc_financial_loss_p95'].max()/1_000_000,2)}m", "uncertainty worst case")}
-    </div>
-
-    <div class="card">
-        <h2>Financial loss breakdown</h2>
-        <table>
-            <tr>
-                <th>Place</th>
-                <th>ENS MW</th>
-                <th>ENS MWh</th>
-                <th>Duration</th>
-                <th>VoLL loss</th>
-                <th>Customer loss</th>
-                <th>Business loss</th>
-                <th>Restoration</th>
-                <th>Critical services</th>
-                <th>Total</th>
-            </tr>
-            {rows}
-        </table>
-    </div>
-    """
-
-    return render_app(
-        "Financial Loss Model",
-        "Estimated loss includes energy not supplied, value of lost load, customer interruption, business disruption, critical services and restoration cost.",
-        content,
-    )
-
-
-def page_montecarlo(region, scenario, layer, places, outages, grid):
-    worst = places.sort_values("mc_p95", ascending=False).iloc[0]
-    hist = histogram(worst["mc_histogram"])
-
-    rows = ""
-    for _, r in places.sort_values("mc_p95", ascending=False).iterrows():
-        rows += f"""
-        <tr>
-            <td><strong>{r['place']}</strong></td>
-            <td>{r['mc_mean']}</td>
-            <td>{r['mc_std']}</td>
-            <td>{r['mc_p05']}</td>
-            <td>{r['mc_p50']}</td>
-            <td>{r['mc_p95']}</td>
-            <td>{round(r['mc_extreme_probability']*100,1)}%</td>
-            <td>£{round(r['mc_financial_loss_p95']/1_000_000,2)}m</td>
-        </tr>
-        """
-
-    content = f"""
-    <div class="grid">
-        {metric_card("Worst P95 Risk", f"{worst['mc_p95']}", worst["place"])}
-        {metric_card("Extreme Probability", f"{round(worst['mc_extreme_probability']*100,1)}%", "P(risk ≥ 80)")}
-        {metric_card("P95 Financial Loss", f"£{round(worst['mc_financial_loss_p95']/1_000_000,2)}m", "uncertainty loss")}
-        {metric_card("Mean MC Resilience", f"{worst['mc_resilience_mean']}", "uncertainty resilience")}
-    </div>
-
-    <div class="grid-2">
-        <div class="card">
-            <h2>Monte Carlo histogram — {worst['place']}</h2>
-            {hist}
-        </div>
-
-        <div class="card">
-            <h2>Improved Monte Carlo logic</h2>
-            <p>Randomly perturbs wind, rain, temperature, AQI, solar radiation, cloud cover and ENS.</p>
-            <div class="alert">P95 represents high-end risk under uncertainty, not a single deterministic forecast.</div>
-        </div>
-    </div>
-
-    <div class="card">
-        <h2>Monte Carlo table</h2>
-        <table>
-            <tr>
-                <th>Place</th>
-                <th>Mean</th>
-                <th>Std</th>
-                <th>P05</th>
-                <th>P50</th>
-                <th>P95</th>
-                <th>Extreme prob.</th>
-                <th>P95 loss</th>
-            </tr>
-            {rows}
-        </table>
-    </div>
-    """
-
-    return render_app("Monte Carlo", "Advanced uncertainty simulation with risk, resilience and financial loss.", content)
-
-
-def page_satellite(region, scenario, layer, places, outages, grid):
-    content = """
-    <div class="card">
-        <h2>NASA Satellite Storyboard</h2>
-        <p style="color:#94a3b8;">
-            Four-panel satellite visual narrative: pre-event, disturbance, peak failure and recovery.
-        </p>
-    </div>
-
-    <div class="grid-2">
-        <div class="card"><h3>(a) Pre-event</h3><div id="story0" class="small-map"></div></div>
-        <div class="card"><h3>(b) Disturbance</h3><div id="story1" class="small-map"></div></div>
-        <div class="card"><h3>(c) Peak failure</h3><div id="story2" class="small-map"></div></div>
-        <div class="card"><h3>(d) Recovery</h3><div id="story3" class="small-map"></div></div>
-    </div>
-
-    <div class="card">
-        <h2>Suggested caption</h2>
-        <p>
-            Spatiotemporal evolution of grid risk over the selected region using NASA GIBS imagery,
-            Northern Powergrid outage markers, postcode information and scenario-adjusted hazard overlays.
-        </p>
-    </div>
-    """
-
-    return render_app("NASA Storyboard", "NASA GIBS layers with outage and risk overlays.", content, nasa_storyboard_script("story"))
-
-
-def page_data(region, scenario, layer, places, outages, grid):
-    place_rows = ""
-    for _, r in places.iterrows():
-        place_rows += f"""
-        <tr>
-            <td>{r['place']}</td>
-            <td>{round(r['wind_speed_10m'],2)}</td>
-            <td>{round(r['precipitation'],2)}</td>
-            <td>{round(r['european_aqi'],2)}</td>
-            <td>{round(r['imd_score'],2)}</td>
-            <td>{r['imd_source']}</td>
-            <td>{r['imd_match']}</td>
-            <td>{round(r['social_vulnerability'],2)}</td>
-            <td>{round(r['energy_not_supplied_mw'],2)}</td>
-            <td>{round(r['total_financial_loss_gbp'],2)}</td>
-            <td>{round(r['final_risk_score'],2)}</td>
-            <td>{round(r['resilience_index'],2)}</td>
-        </tr>
-        """
-
-    outage_rows = ""
-    for _, r in outages.head(100).iterrows():
-        outage_rows += f"""
-        <tr>
-            <td>{r['outage_reference']}</td>
-            <td>{r['outage_status']}</td>
-            <td>{r['postcode_label']}</td>
-            <td>{int(r['affected_customers'])}</td>
-            <td>{round(r['latitude'],4)}</td>
-            <td>{round(r['longitude'],4)}</td>
-        </tr>
-        """
-
-    content = f"""
-    <div class="card">
-        <h2>Place-level data</h2>
-        <table>
-            <tr>
-                <th>Place</th>
-                <th>Wind</th>
-                <th>Rain</th>
-                <th>AQI</th>
-                <th>IoD score</th>
-                <th>IoD source</th>
-                <th>IoD match</th>
-                <th>Social vuln.</th>
-                <th>ENS MW</th>
-                <th>Financial loss</th>
-                <th>Risk</th>
-                <th>Resilience</th>
-            </tr>
-            {place_rows}
-        </table>
-    </div>
-
-    <div class="card">
-        <h2>Northern Powergrid outage data</h2>
-        <table>
-            <tr>
-                <th>Reference</th>
-                <th>Status</th>
-                <th>Postcode</th>
-                <th>Customers</th>
-                <th>Lat</th>
-                <th>Lon</th>
-            </tr>
-            {outage_rows}
-        </table>
-    </div>
-    """
-
-    return render_app("Data", "Model inputs and outputs.", content)
-
-
-@app.route("/download")
-def download_csv():
-    region, scenario, layer, page, mc = get_controls()
-    places, outages, grid = get_data(region, scenario, mc)
-    csv = places.to_csv(index=False)
-    return Response(
-        csv,
-        mimetype="text/csv",
-        headers={"Content-Disposition": "attachment; filename=grid_digital_twin_places.csv"},
-    )
-
+    tabs = st.tabs([
+        "Overview",
+        "Map",
+        "Resilience",
+        "Postcodes",
+        "Investment",
+        "Finance",
+        "Monte Carlo",
+        "Data / Export",
+    ])
+
+    with tabs[0]:
+        left, right = st.columns([1.15, 0.85])
+
+        with left:
+            st.subheader("Regional intelligence")
+            display_cols = [
+                "place",
+                "final_risk_score",
+                "risk_label",
+                "resilience_index",
+                "resilience_label",
+                "wind_speed_10m",
+                "precipitation",
+                "european_aqi",
+                "social_vulnerability",
+                "energy_not_supplied_mw",
+                "total_financial_loss_gbp",
+            ]
+            st.dataframe(
+                places[display_cols].sort_values("final_risk_score", ascending=False),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        with right:
+            st.subheader("Risk distribution")
+            st.bar_chart(places.set_index("place")["final_risk_score"])
+
+            st.subheader("Resilience distribution")
+            st.bar_chart(places.set_index("place")["resilience_index"])
+
+        st.info(f"IoD / deprivation data source: {imd_source}")
+
+    with tabs[1]:
+        st.subheader("Spatial view")
+        render_pydeck_map(region, places, outages, pc, map_mode)
+
+        st.caption("Risk markers are city/town-level model outputs. Postcode markers are postcode-prefix level resilience/investment estimates.")
+
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.subheader("Grid cells")
+            st.dataframe(grid.sort_values("risk_score", ascending=False).head(50), use_container_width=True, hide_index=True)
+
+        with col_b:
+            st.subheader("Outages")
+            st.dataframe(outages.head(100), use_container_width=True, hide_index=True)
+
+    with tabs[2]:
+        st.subheader("Resilience diagnostics")
+        res_cols = [
+            "place",
+            "resilience_label",
+            "resilience_index",
+            "imd_score",
+            "imd_match",
+            "social_vulnerability",
+            "grid_failure_probability",
+            "renewable_failure_probability",
+            "total_financial_loss_gbp",
+        ]
+        st.dataframe(
+            places[res_cols].sort_values("resilience_index"),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        c1, c2 = st.columns(2)
+        with c1:
+            st.bar_chart(places.set_index("place")["grid_failure_probability"])
+        with c2:
+            st.bar_chart(places.set_index("place")["renewable_failure_probability"])
+
+    with tabs[3]:
+        st.subheader("Postcode-level resilience")
+        if pc.empty:
+            st.warning("No postcode resilience data could be generated.")
+        else:
+            top_cols = [
+                "postcode",
+                "nearest_place",
+                "resilience_label",
+                "resilience_score",
+                "risk_score",
+                "social_vulnerability",
+                "outage_records",
+                "affected_customers",
+                "energy_not_supplied_mw",
+                "financial_loss_gbp",
+                "investment_priority",
+                "recommendation_score",
+            ]
+            st.dataframe(pc[top_cols], use_container_width=True, hide_index=True)
+            st.bar_chart(pc.set_index("postcode")["recommendation_score"])
+
+    with tabs[4]:
+        st.subheader("Prioritised investment recommendations")
+        if rec.empty:
+            st.warning("No investment recommendations could be generated.")
+        else:
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Priority 1 areas", int((rec["investment_priority"] == "Priority 1").sum()))
+            c2.metric("Indicative programme cost", format_money_m(rec["indicative_investment_cost_gbp"].sum()))
+            c3.metric("Exposed financial loss", format_money_m(rec["financial_loss_gbp"].sum()))
+
+            investment_cols = [
+                "postcode",
+                "nearest_place",
+                "investment_priority",
+                "recommendation_score",
+                "investment_category",
+                "recommended_action",
+                "indicative_investment_cost_gbp",
+                "financial_loss_gbp",
+            ]
+            st.dataframe(rec[investment_cols], use_container_width=True, hide_index=True)
+
+    with tabs[5]:
+        st.subheader("Financial loss model")
+        fin_cols = [
+            "place",
+            "energy_not_supplied_mw",
+            "ens_mwh",
+            "estimated_duration_hours",
+            "voll_loss_gbp",
+            "customer_interruption_loss_gbp",
+            "business_disruption_loss_gbp",
+            "restoration_loss_gbp",
+            "critical_services_loss_gbp",
+            "total_financial_loss_gbp",
+        ]
+        st.dataframe(
+            places[fin_cols].sort_values("total_financial_loss_gbp", ascending=False),
+            use_container_width=True,
+            hide_index=True,
+        )
+        st.bar_chart(places.set_index("place")["total_financial_loss_gbp"])
+
+    with tabs[6]:
+        st.subheader("Monte Carlo uncertainty")
+        worst = places.sort_values("mc_p95", ascending=False).iloc[0]
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Worst P95 risk", worst["mc_p95"], worst["place"])
+        c2.metric("Extreme probability", f"{round(worst['mc_extreme_probability'] * 100, 1)}%")
+        c3.metric("P95 financial loss", format_money_m(worst["mc_financial_loss_p95"]))
+        c4.metric("Mean MC resilience", worst["mc_resilience_mean"])
+
+        hist_values = worst.get("mc_histogram", [])
+        if hist_values:
+            hist_df = pd.DataFrame({"risk": hist_values})
+            counts = pd.cut(hist_df["risk"], bins=np.linspace(0, 100, 25)).value_counts().sort_index()
+            counts.index = counts.index.astype(str)
+            st.bar_chart(counts)
+
+        mc_cols = [
+            "place",
+            "mc_mean",
+            "mc_std",
+            "mc_p05",
+            "mc_p50",
+            "mc_p95",
+            "mc_extreme_probability",
+            "mc_financial_loss_p95",
+        ]
+        st.dataframe(
+            places[mc_cols].sort_values("mc_p95", ascending=False),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    with tabs[7]:
+        st.subheader("Raw model outputs")
+
+        st.markdown("#### Places")
+        st.dataframe(places, use_container_width=True, hide_index=True)
+
+        st.markdown("#### Outages")
+        st.dataframe(outages, use_container_width=True, hide_index=True)
+
+        st.markdown("#### Grid")
+        st.dataframe(grid, use_container_width=True, hide_index=True)
+
+        st.download_button(
+            "Download place-level CSV",
+            data=places.to_csv(index=False).encode("utf-8"),
+            file_name="sat_guard_places.csv",
+            mime="text/csv",
+        )
+
+        st.download_button(
+            "Download postcode recommendations CSV",
+            data=rec.to_csv(index=False).encode("utf-8") if not rec.empty else b"",
+            file_name="sat_guard_postcode_recommendations.csv",
+            mime="text/csv",
+            disabled=rec.empty,
+        )
+
+
+if __name__ == "__main__":
+    main()
