@@ -51,6 +51,9 @@ import pandas as pd
 import requests
 from flask import Flask, Response, jsonify, render_template_string, request
 
+import time
+print("Starting app...")
+time.sleep(2)
 
 app = Flask(__name__)
 
