@@ -408,10 +408,15 @@ def get_nasa_tile_url(layer_name: str, date_string: str = None) -> str:
     return NASA_LAYERS[layer_name].replace("{date}", date_string)
 
 
-def requests_json(url: str, params: Dict[str, Any] = None, timeout: int = 12) -> Dict[str, Any]:
+def requests_json(url: str, params: Dict[str, Any] = None, timeout: int = 20) -> Dict[str, Any]:
     try:
         headers = {"User-Agent": "flask-grid-digital-twin-imd-bbc/4.0"}
-        response = requests.get(url, params=params or {}, headers=headers, timeout=timeout, verify=False)
+        response = requests.get(
+            url,
+            params=params or {},
+            headers=headers,
+            timeout=timeout
+        )
         response.raise_for_status()
         return response.json()
     except Exception:
@@ -578,7 +583,7 @@ def load_imd_summary() -> Tuple[pd.DataFrame, str]:
     - tries to infer IMD score, rank, decile, or average-rank style measure
     - converts ranks/deciles into 0-100 vulnerability score
     """
-    if IMD_CACHE["loaded"]:
+    if IMD_CACHE["loaded"] and IMD_CACHE["summary"] is not None:
         return IMD_CACHE["summary"].copy(), IMD_CACHE["source"]
 
     files = find_imd_files()
@@ -672,15 +677,17 @@ def infer_imd_for_place(place: str, region: str, meta: Dict[str, Any], imd_summa
 # EXTERNAL DATA FETCHING
 # =============================================================================
 
-def fetch_weather(lat: float, lon: float) -> Dict[str, Any]:
-    params = {
-        "latitude": lat,
-        "longitude": lon,
-        "current": WEATHER_CURRENT_VARS,
-        "timezone": "Europe/London",
-    }
-    return requests_json(OPEN_METEO_WEATHER_URL, params=params)
+WEATHER_CACHE = {}
+AIR_CACHE = {}
 
+def fetch_weather(lat, lon):
+    key = f"{lat}_{lon}"
+    if key in WEATHER_CACHE:
+        return WEATHER_CACHE[key]
+
+    data = requests_json(...)
+    WEATHER_CACHE[key] = data
+    return data
 
 def fetch_air_quality(lat: float, lon: float) -> Dict[str, Any]:
     params = {
@@ -1320,7 +1327,9 @@ def build_grid(region: str, places: pd.DataFrame, outages: pd.DataFrame) -> pd.D
 
 def get_data(region: str, scenario: str, mc_runs: int) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     key = f"{region}|{scenario}|{mc_runs}"
-    now = datetime.utcnow()
+    from datetime import datetime, UTC
+
+    now = datetime.now(UTC)
 
     if (
         DATA_CACHE["timestamp"] is not None
@@ -1364,7 +1373,7 @@ def get_controls() -> Tuple[str, str, str, str, int]:
 
     page = request.args.get("page", "overview")
 
-    mc = safe_int(request.args.get("mc"), 100)
+    mc = safe_int(request.args.get("mc"), 30)
     mc = int(clamp(mc, 20, 500))
 
     return region, scenario, layer, page, mc
@@ -2604,34 +2613,9 @@ BASE_HTML = """
 </html>
 """
 
-
 # =============================================================================
 # RENDER HELPERS
 # =============================================================================
-
-def get_controls() -> Tuple[str, str, str, str, int]:
-    region = request.args.get("region", "North East")
-    if region not in REGIONS:
-        region = "North East"
-
-    scenario = request.args.get("scenario", "Live / Real-time")
-    if scenario not in SCENARIOS:
-        scenario = "Live / Real-time"
-
-    layer = request.args.get("layer", "VIIRS NOAA-20 True Colour")
-    if layer not in NASA_LAYERS:
-        layer = "VIIRS NOAA-20 True Colour"
-
-    page = request.args.get("page", "overview")
-
-    mc = safe_int(request.args.get("mc"), 100)
-    mc = int(clamp(mc, 20, 500))
-
-    return region, scenario, layer, page, mc
-
-
-def make_base_url(region: str, scenario: str, layer: str, mc: int) -> str:
-    return f"/?region={region}&scenario={scenario}&layer={layer}&mc={mc}"
 
 
 def render_app(title: str, subtitle: str, content: str, scripts: str = "") -> str:
@@ -2740,90 +2724,6 @@ def histogram(values: List[float]) -> str:
 
 # =============================================================================
 # API ROUTES
-# =============================================================================
-
-@app.route("/api/data")
-def api_data():
-    region, scenario, layer, page, mc = get_controls()
-    places, outages, grid = get_data(region, scenario, mc)
-
-    return jsonify({
-        "region": region,
-        "scenario": scenario,
-        "hazard_mode": SCENARIOS[scenario]["hazard_mode"],
-        "layer": layer,
-        "center": REGIONS[region]["center"],
-        "nasa_tile": get_nasa_tile_url(layer),
-        "imd_source": IMD_CACHE.get("source") or "",
-        "places": places.to_dict("records"),
-        "outages": outages.to_dict("records"),
-        "grid": grid.to_dict("records"),
-    })
-
-
-
-@app.route("/api/postcode_resilience")
-def api_postcode_resilience():
-    region, scenario, layer, page, mc = get_controls()
-    places, outages, grid = get_data(region, scenario, mc)
-    pc = build_postcode_resilience(places, outages)
-
-    return jsonify({
-        "region": region,
-        "scenario": scenario,
-        "center": REGIONS[region]["center"],
-        "postcodes": pc.to_dict("records"),
-    })
-
-
-@app.route("/api/bbc_frames")
-def api_bbc_frames():
-    region, scenario, layer, page, mc = get_controls()
-    places, outages, grid = get_data(region, scenario, mc)
-
-    hazard_mode = SCENARIOS[scenario]["hazard_mode"]
-    frames = []
-
-    for h in range(0, 24, 2):
-        phase = math.sin((h / 24) * math.pi * 2)
-        frame_cells = []
-
-        for _, g in grid.iterrows():
-            wind_factor = 1 + 0.25 * phase + random.uniform(-0.06, 0.06)
-            risk_factor = 1 + 0.18 * phase + random.uniform(-0.05, 0.05)
-            rain_factor = 1 + 0.35 * max(phase, 0) + random.uniform(-0.05, 0.05)
-
-            frame_cells.append({
-                "lat": g["lat"],
-                "lon": g["lon"],
-                "wind_speed": round(max(0, g["wind_speed"] * wind_factor), 2),
-                "rain": round(max(0, g["rain"] * rain_factor), 2),
-                "risk_score": round(clamp(g["risk_score"] * risk_factor, 0, 100), 2),
-                "resilience_index": round(clamp(g["resilience_index"] - (phase * 7), 0, 100), 2),
-                "energy_not_supplied_mw": g["energy_not_supplied_mw"],
-                "financial_loss_gbp": g["financial_loss_gbp"],
-                "flood_depth_proxy": g["flood_depth_proxy"],
-            })
-
-        frames.append({
-            "hour": h,
-            "label": f"+{h:02d}h",
-            "hazard_mode": hazard_mode,
-            "cells": frame_cells,
-        })
-
-    return jsonify({
-        "center": REGIONS[region]["center"],
-        "hazard_mode": hazard_mode,
-        "scenario": scenario,
-        "frames": frames,
-        "places": places.to_dict("records"),
-        "outages": outages.to_dict("records"),
-    })
-
-
-# =============================================================================
-# JAVASCRIPT MAPS
 # =============================================================================
 
 def simple_map_script(map_id: str) -> str:
@@ -4613,13 +4513,3 @@ def download_csv():
         headers={"Content-Disposition": "attachment; filename=grid_digital_twin_places.csv"},
     )
 
-
-if __name__ == "__main__":
-    try:
-        import urllib3
-        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-    except Exception:
-        pass
-
-    print("Website is running at: http://localhost:5000")
-    app.run(debug=True)
