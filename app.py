@@ -530,6 +530,56 @@ def scenario_financial_matrix(places: pd.DataFrame, region: str, mc_runs: int) -
     return pd.DataFrame(rows).sort_values("total_financial_loss_gbp", ascending=False)
 
 
+
+
+def render_iod2025_data_quality_tab(places: pd.DataFrame) -> None:
+    st.subheader("IoD2025 data integration and socio-economic evidence")
+
+    domain_df, source = load_iod2025_domain_model()
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Readable IoD rows", 0 if domain_df is None or domain_df.empty else len(domain_df))
+    c2.metric("Matched app places", int((~places.get("iod_domain_match", pd.Series(dtype=str)).astype(str).str.contains("fallback", case=False, na=False)).sum()) if "iod_domain_match" in places.columns else 0)
+    c3.metric("Mean social vulnerability", f"{places['social_vulnerability'].mean():.1f}/100")
+    c4.metric("Max social vulnerability", f"{places['social_vulnerability'].max():.1f}/100")
+
+    st.markdown(
+        f"""
+        <div class="q1-note">
+        <b>IoD source status:</b> {source}<br>
+        The app now scans <code>data/iod2025</code>, <code>data</code>, project root and Streamlit Cloud mount paths.
+        When domain files are matched, social vulnerability is calculated from Income, Employment, Health,
+        Education, Crime, Housing/Services, Living Environment, IDACI and IDAOPI.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    cols = [
+        "place", "postcode_prefix", "social_vulnerability", "imd_score",
+        "iod_social_vulnerability", "iod_domain_match", "iod_income",
+        "iod_employment", "iod_health", "iod_education", "iod_crime",
+        "iod_housing", "iod_living", "iod_idaci", "iod_idaopi"
+    ]
+    available = [c for c in cols if c in places.columns]
+    st.dataframe(places[available], use_container_width=True, hide_index=True)
+
+    if domain_df is not None and not domain_df.empty:
+        st.markdown("#### Raw readable IoD2025 domain sample")
+        st.dataframe(domain_df.head(200), use_container_width=True, hide_index=True)
+
+        numeric = [c for c in ["income", "employment", "health", "education", "crime", "housing", "living", "idaci", "idaopi"] if c in domain_df.columns]
+        if numeric:
+            fig = px.histogram(
+                domain_df,
+                x="iod_social_vulnerability_0_100",
+                nbins=40,
+                title="Distribution of IoD2025 composite social vulnerability",
+                template=plotly_template(),
+            )
+            fig.update_layout(height=420, margin=dict(l=10, r=10, t=55, b=10))
+            st.plotly_chart(fig, use_container_width=True)
+
+
 def render_hazard_resilience_tab(places: pd.DataFrame, pc: pd.DataFrame) -> None:
     st.subheader("Natural-hazard resilience by postcode")
     hz = build_hazard_resilience_matrix(places, pc)
@@ -1245,12 +1295,34 @@ def pct(value: float) -> str:
 # IMD / IOD2025 DATASET LOADER
 # =============================================================================
 
+
 def find_imd_files() -> List[Path]:
+    """
+    Finds IoD2025 / deprivation spreadsheets in common local, GitHub and
+    Streamlit Cloud deployment paths.
+
+    Recommended GitHub structure:
+        data/iod2025/
+            File_1_IoD2025 Index of Multiple Deprivation.xlsx
+            File_2_IoD2025 Domains of Deprivation.xlsx
+            File_3_IoD2025 Supplementary Indices_IDACI and IDAOPI.xlsx
+            IoD2025 Local Authority District Summaries (lower-tier) - Rank of average rank.xlsx
+    """
     current = Path.cwd()
+
     possible_dirs = [
         current,
         current / "data",
+        current / "data" / "iod2025",
+        current / "iod2025",
+        current / "datasets",
+        current / "datasets" / "iod2025",
+        Path("/mount/src/sat-guard-dt"),
+        Path("/mount/src/sat-guard-dt") / "data",
+        Path("/mount/src/sat-guard-dt") / "data" / "iod2025",
         Path("/mnt/data"),
+        Path("/mnt/data") / "data",
+        Path("/mnt/data") / "data" / "iod2025",
     ]
 
     explicit = [
@@ -1258,26 +1330,49 @@ def find_imd_files() -> List[Path]:
         "File_1_IoD2025 Index of Multiple Deprivation.xlsx",
         "File_2_IoD2025 Domains of Deprivation.xlsx",
         "File_3_IoD2025 Supplementary Indices_IDACI and IDAOPI.xlsx",
+        "imd.xlsx",
+        "domains.xlsx",
+        "supplementary.xlsx",
+        "lad_summary.xlsx",
     ]
 
     files = []
 
     for folder in possible_dirs:
-        if not folder.exists():
+        try:
+            if not folder.exists():
+                continue
+
+            for name in explicit:
+                p = folder / name
+                if p.exists() and p not in files:
+                    files.append(p)
+
+            patterns = [
+                "*IoD2025*.xlsx",
+                "*IOD2025*.xlsx",
+                "*Deprivation*.xlsx",
+                "*deprivation*.xlsx",
+                "*IDACI*.xlsx",
+                "*IDAOPI*.xlsx",
+                "*Domains*.xlsx",
+                "*domains*.xlsx",
+                "*Multiple*.xlsx",
+                "*.xlsx",
+            ]
+
+            for pattern in patterns:
+                for p in folder.glob(pattern):
+                    if p.exists() and p.suffix.lower() in [".xlsx", ".xls"] and p not in files:
+                        files.append(p)
+
+            # One-level recursive scan for GitHub folders
+            for p in folder.glob("*/*.xlsx"):
+                if p.exists() and p not in files:
+                    files.append(p)
+
+        except Exception:
             continue
-
-        for name in explicit:
-            p = folder / name
-            if p.exists():
-                files.append(p)
-
-        for p in folder.glob("*IoD2025*.xlsx"):
-            if p not in files:
-                files.append(p)
-
-        for p in folder.glob("*Deprivation*.xlsx"):
-            if p not in files:
-                files.append(p)
 
     return files
 
@@ -1473,6 +1568,234 @@ def infer_imd_for_place(place: str, region: str, meta: Dict[str, Any], imd_summa
 # =============================================================================
 
 @st.cache_data(ttl=900, show_spinner=False)
+
+
+def load_iod2025_domain_model() -> Tuple[pd.DataFrame, str]:
+    """
+    More advanced IoD2025 domain loader. It attempts to read the official IoD2025
+    files from data/iod2025 and extract multi-domain social vulnerability fields.
+
+    The function is intentionally schema-flexible because official Excel exports
+    may use slightly different sheet names and column labels.
+    """
+    files = find_imd_files()
+    parts = []
+    notes = []
+
+    domain_keywords = {
+        "income": ["income"],
+        "employment": ["employment"],
+        "health": ["health", "disability"],
+        "education": ["education", "skills", "training"],
+        "crime": ["crime"],
+        "housing": ["housing", "barriers"],
+        "living": ["living", "environment"],
+        "idaci": ["idaci"],
+        "idaopi": ["idaopi"],
+        "imd": ["imd"],
+    }
+
+    for file_path in files:
+        try:
+            sheets = pd.read_excel(file_path, sheet_name=None, engine="openpyxl")
+        except Exception:
+            continue
+
+        for sheet_name, df in sheets.items():
+            if df is None or df.empty:
+                continue
+
+            try:
+                work = df.copy().dropna(axis=1, how="all")
+                cols = list(work.columns)
+
+                area_col = (
+                    choose_first_matching_column(cols, ["local", "authority"])
+                    or choose_first_matching_column(cols, ["lad"])
+                    or choose_first_matching_column(cols, ["district"])
+                    or choose_first_matching_column(cols, ["area"])
+                    or choose_first_matching_column(cols, ["name"])
+                    or choose_first_matching_column(cols, ["lsoa", "name"])
+                )
+
+                code_col = (
+                    choose_first_matching_column(cols, ["lsoa", "code"])
+                    or choose_first_matching_column(cols, ["area", "code"])
+                    or choose_first_matching_column(cols, ["lad", "code"])
+                )
+
+                if area_col is None and code_col is None:
+                    continue
+
+                out = pd.DataFrame()
+                out["area_name"] = work[area_col].astype(str) if area_col is not None else work[code_col].astype(str)
+                out["area_key"] = out["area_name"].str.lower()
+                if code_col is not None:
+                    out["area_code"] = work[code_col].astype(str)
+                else:
+                    out["area_code"] = ""
+
+                found_any = False
+                for model_name, keys in domain_keywords.items():
+                    col = choose_first_matching_column(cols, keys + ["score"])
+                    if col is None:
+                        col = choose_first_matching_column(cols, keys + ["rate"])
+                    if col is None:
+                        col = choose_first_matching_column(cols, keys + ["rank"])
+                    if col is None:
+                        col = choose_first_matching_column(cols, keys)
+
+                    if col is not None:
+                        vals = pd.to_numeric(work[col], errors="coerce")
+                        if vals.dropna().empty:
+                            continue
+
+                        # Convert ranks into vulnerability direction where possible.
+                        col_clean = clean_col(col)
+                        if "rank" in col_clean and vals.max() > vals.min():
+                            vals = (1 - (vals - vals.min()) / max(vals.max() - vals.min(), 1)) * 100
+                        elif vals.max() <= 1.5:
+                            vals = vals * 100
+                        elif vals.max() > 100 or vals.min() < 0:
+                            vals = (vals - vals.min()) / max(vals.max() - vals.min(), 1) * 100
+
+                        out[model_name] = vals.clip(0, 100)
+                        found_any = True
+
+                if found_any:
+                    out["source_file"] = f"{file_path.name} | {sheet_name}"
+                    parts.append(out)
+                    notes.append(f"{file_path.name}:{sheet_name}")
+
+            except Exception:
+                continue
+
+    if not parts:
+        return pd.DataFrame(), "No readable IoD2025 domain model found; using fallback configured proxies."
+
+    all_df = pd.concat(parts, ignore_index=True)
+
+    # Group duplicate areas and keep mean domain scores.
+    numeric_cols = [c for c in all_df.columns if c not in ["area_name", "area_key", "area_code", "source_file"]]
+    grouped = (
+        all_df.groupby("area_key", as_index=False)
+        .agg(
+            area_name=("area_name", "first"),
+            area_code=("area_code", "first"),
+            source_file=("source_file", "first"),
+            **{c: (c, "mean") for c in numeric_cols}
+        )
+    )
+
+    # Weighted social vulnerability index.
+    weights = {
+        "income": 0.22,
+        "employment": 0.18,
+        "health": 0.16,
+        "education": 0.10,
+        "crime": 0.08,
+        "housing": 0.10,
+        "living": 0.08,
+        "idaci": 0.04,
+        "idaopi": 0.04,
+    }
+
+    available = [c for c in weights if c in grouped.columns]
+    if available:
+        total_w = sum(weights[c] for c in available)
+        grouped["iod_social_vulnerability_0_100"] = sum(grouped[c].fillna(grouped[c].mean()) * weights[c] for c in available) / total_w
+        grouped["iod_social_vulnerability_0_100"] = grouped["iod_social_vulnerability_0_100"].clip(0, 100)
+    else:
+        grouped["iod_social_vulnerability_0_100"] = np.nan
+
+    return grouped, "; ".join(notes[:12])
+
+
+def infer_iod_domain_vulnerability(place: str, region: str, meta: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Match a configured town/place to IoD2025 domain data and return a richer
+    vulnerability profile. Falls back safely when files are absent.
+    """
+    df, source = load_iod2025_domain_model()
+    fallback = safe_float(meta.get("vulnerability_proxy"), 45)
+
+    if df is None or df.empty or "iod_social_vulnerability_0_100" not in df.columns:
+        return {
+            "iod_social_vulnerability": fallback,
+            "iod_domain_source": source,
+            "iod_domain_match": "fallback proxy",
+            "iod_income": np.nan,
+            "iod_employment": np.nan,
+            "iod_health": np.nan,
+            "iod_education": np.nan,
+            "iod_crime": np.nan,
+            "iod_housing": np.nan,
+            "iod_living": np.nan,
+            "iod_idaci": np.nan,
+            "iod_idaopi": np.nan,
+        }
+
+    tokens = [place.lower()] + [t.lower() for t in meta.get("authority_tokens", [])]
+    region_tokens = [t.lower() for t in REGIONS[region]["tokens"]]
+
+    hit = pd.DataFrame()
+    matched_token = ""
+
+    for token in tokens:
+        hit = df[df["area_key"].str.contains(token, regex=False, na=False)]
+        if not hit.empty:
+            matched_token = token
+            break
+
+    if hit.empty:
+        regional = []
+        for token in region_tokens:
+            tmp = df[df["area_key"].str.contains(token, regex=False, na=False)]
+            if not tmp.empty:
+                regional.append(tmp)
+        if regional:
+            hit = pd.concat(regional, ignore_index=True)
+            matched_token = "regional token average"
+
+    if hit.empty:
+        return {
+            "iod_social_vulnerability": fallback,
+            "iod_domain_source": source,
+            "iod_domain_match": "no authority/domain match; fallback proxy",
+            "iod_income": np.nan,
+            "iod_employment": np.nan,
+            "iod_health": np.nan,
+            "iod_education": np.nan,
+            "iod_crime": np.nan,
+            "iod_housing": np.nan,
+            "iod_living": np.nan,
+            "iod_idaci": np.nan,
+            "iod_idaopi": np.nan,
+        }
+
+    def mean_col(col):
+        return round(float(hit[col].dropna().mean()), 2) if col in hit.columns and not hit[col].dropna().empty else np.nan
+
+    return {
+        "iod_social_vulnerability": round(float(hit["iod_social_vulnerability_0_100"].dropna().mean()), 2),
+        "iod_domain_source": source,
+        "iod_domain_match": f"matched: {matched_token}",
+        "iod_income": mean_col("income"),
+        "iod_employment": mean_col("employment"),
+        "iod_health": mean_col("health"),
+        "iod_education": mean_col("education"),
+        "iod_crime": mean_col("crime"),
+        "iod_housing": mean_col("housing"),
+        "iod_living": mean_col("living"),
+        "iod_idaci": mean_col("idaci"),
+        "iod_idaopi": mean_col("idaopi"),
+    }
+
+
+# =============================================================================
+# EXTERNAL DATA FETCHING
+# =============================================================================
+
 def fetch_weather(lat: float, lon: float) -> Dict[str, Any]:
     params = {
         "latitude": lat,
@@ -1981,7 +2304,22 @@ def build_places(region: str, scenario_name: str, mc_runs: int) -> Tuple[pd.Data
             affected_customers = max(affected_customers, 3000)
 
         imd_info = infer_imd_for_place(place, region, meta, imd_summary)
-        social_vuln = social_vulnerability_score(row["population_density"], imd_info["imd_score"])
+        iod_profile = infer_iod_domain_vulnerability(place, region, meta)
+
+        # Prefer richer IoD2025 multi-domain vulnerability when files are available.
+        # If the domain loader cannot match the authority, fall back to the legacy IMD/proxy model.
+        if "fallback" not in str(iod_profile.get("iod_domain_match", "")).lower():
+            social_vuln = round(
+                clamp(
+                    0.70 * safe_float(iod_profile.get("iod_social_vulnerability"))
+                    + 0.30 * social_vulnerability_score(row["population_density"], imd_info["imd_score"]),
+                    0,
+                    100,
+                ),
+                2,
+            )
+        else:
+            social_vuln = social_vulnerability_score(row["population_density"], imd_info["imd_score"])
 
         outage_intensity = clamp((nearby / 20) * row.get("scenario_outage_multiplier", 1.0), 0, 1)
 
@@ -2037,6 +2375,18 @@ def build_places(region: str, scenario_name: str, mc_runs: int) -> Tuple[pd.Data
             "imd_match": imd_info["imd_match"],
             "imd_dataset_summary": imd_source,
             "social_vulnerability": social_vuln,
+            "iod_social_vulnerability": iod_profile.get("iod_social_vulnerability"),
+            "iod_domain_source": iod_profile.get("iod_domain_source"),
+            "iod_domain_match": iod_profile.get("iod_domain_match"),
+            "iod_income": iod_profile.get("iod_income"),
+            "iod_employment": iod_profile.get("iod_employment"),
+            "iod_health": iod_profile.get("iod_health"),
+            "iod_education": iod_profile.get("iod_education"),
+            "iod_crime": iod_profile.get("iod_crime"),
+            "iod_housing": iod_profile.get("iod_housing"),
+            "iod_living": iod_profile.get("iod_living"),
+            "iod_idaci": iod_profile.get("iod_idaci"),
+            "iod_idaopi": iod_profile.get("iod_idaopi"),
             "renewable_failure_probability": renewable_fail,
             "grid_failure_probability": grid_fail,
             "resilience_index": resilience,
@@ -3611,6 +3961,7 @@ def main() -> None:
         "Executive overview",
         "BBC simulation",
         "Natural hazards",
+        "IoD2025 socio-economic evidence",
         "Spatial intelligence",
         "Resilience",
         "EV / V2G storm operation",
@@ -3635,39 +3986,42 @@ def main() -> None:
         render_hazard_resilience_tab(places, pc)
 
     with tabs[3]:
-        spatial_tab(region, places, outages, pc, grid, map_mode)
+        render_iod2025_data_quality_tab(places)
 
     with tabs[4]:
-        resilience_tab(places)
+        spatial_tab(region, places, outages, pc, grid, map_mode)
 
     with tabs[5]:
-        render_ev_v2g_tab(places, scenario)
+        resilience_tab(places)
 
     with tabs[6]:
-        render_failure_and_funding_tab(places, pc)
+        render_ev_v2g_tab(places, scenario)
 
     with tabs[7]:
-        investment_tab(pc, rec)
+        render_failure_and_funding_tab(places, pc)
 
     with tabs[8]:
-        render_scenario_finance_tab(places, region, mc_runs)
+        investment_tab(pc, rec)
 
     with tabs[9]:
-        finance_tab(places)
+        render_scenario_finance_tab(places, region, mc_runs)
 
     with tabs[10]:
-        monte_carlo_tab(places)
+        finance_tab(places)
 
     with tabs[11]:
-        render_improved_monte_carlo_tab(places, q1_mc_runs)
+        monte_carlo_tab(places)
 
     with tabs[12]:
-        render_validation_tab(places, scenario)
+        render_improved_monte_carlo_tab(places, q1_mc_runs)
 
     with tabs[13]:
-        method_tab(places)
+        render_validation_tab(places, scenario)
 
     with tabs[14]:
+        method_tab(places)
+
+    with tabs[15]:
         export_tab(places, outages, grid, pc, rec)
 
 
