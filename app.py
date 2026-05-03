@@ -504,10 +504,17 @@ def validate_model_transparency(places: pd.DataFrame, scenario: str) -> pd.DataF
     return pd.DataFrame(checks)
 
 
+
 def scenario_financial_matrix(places: pd.DataFrame, region: str, mc_runs: int) -> pd.DataFrame:
-    """Compute compact scenario loss table for all scenarios."""
+    """
+    Compute compact scenario loss table for what-if scenarios only.
+    Live / Real-time is intentionally excluded here and shown separately
+    because it is an operational baseline, not a stress scenario.
+    """
     rows = []
-    for scenario_name in SCENARIOS:
+    scenario_names = [s for s in SCENARIOS if s != "Live / Real-time"]
+
+    for scenario_name in scenario_names:
         try:
             p, _, _ = get_data_cached(region, scenario_name, max(10, min(mc_runs, 60)))
             rows.append({
@@ -527,10 +534,8 @@ def scenario_financial_matrix(places: pd.DataFrame, region: str, mc_runs: int) -
                 "total_ens_mw": np.nan,
                 "mean_failure_probability": np.nan,
             })
+
     return pd.DataFrame(rows).sort_values("total_financial_loss_gbp", ascending=False)
-
-
-
 
 def render_iod2025_data_quality_tab(places: pd.DataFrame) -> None:
     st.subheader("IoD2025 data integration and socio-economic evidence")
@@ -579,10 +584,15 @@ def render_iod2025_data_quality_tab(places: pd.DataFrame) -> None:
             fig.update_layout(height=420, margin=dict(l=10, r=10, t=55, b=10))
             st.plotly_chart(fig, use_container_width=True)
 
-
 def render_hazard_resilience_tab(places: pd.DataFrame, pc: pd.DataFrame) -> None:
     st.subheader("Natural-hazard resilience by postcode")
     hz = build_hazard_resilience_matrix(places, pc)
+
+    # Robust numeric coercion to prevent empty/blank plots when values arrive as objects/NaN.
+    hz["resilience_score_out_of_100"] = pd.to_numeric(hz["resilience_score_out_of_100"], errors="coerce").fillna(0).clip(0, 100)
+    hz["hazard_stress_score"] = pd.to_numeric(hz["hazard_stress_score"], errors="coerce").fillna(0).clip(0, 100)
+    hz["postcode"] = hz["postcode"].astype(str)
+    hz["hazard"] = hz["hazard"].astype(str)
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Lowest hazard resilience", f"{hz['resilience_score_out_of_100'].min():.1f}/100")
@@ -592,8 +602,16 @@ def render_hazard_resilience_tab(places: pd.DataFrame, pc: pd.DataFrame) -> None
 
     a, b = st.columns([1.05, 0.95])
     with a:
+        heat = hz.pivot_table(
+            index="postcode",
+            columns="hazard",
+            values="resilience_score_out_of_100",
+            aggfunc="mean",
+            fill_value=0,
+        )
+
         fig = px.imshow(
-            hz.pivot_table(index="postcode", columns="hazard", values="resilience_score_out_of_100", aggfunc="mean"),
+            heat,
             color_continuous_scale="RdYlGn",
             title="Postcode resilience score by natural hazard (0–100)",
             aspect="auto",
@@ -603,18 +621,42 @@ def render_hazard_resilience_tab(places: pd.DataFrame, pc: pd.DataFrame) -> None
         )
         fig.update_layout(height=460, margin=dict(l=10, r=10, t=55, b=10))
         st.plotly_chart(fig, use_container_width=True)
+
     with b:
-        fig = px.bar(
-            hz.sort_values("resilience_score_out_of_100").head(18),
-            x="resilience_score_out_of_100",
-            y="postcode",
-            color="hazard",
-            orientation="h",
-            title="Lowest resilience evidence cases",
-            template=plotly_template(),
-        )
-        fig.update_layout(height=460, margin=dict(l=10, r=10, t=55, b=10))
-        st.plotly_chart(fig, use_container_width=True)
+        # FIX: previously blank when x values were all zero or when axis range collapsed.
+        # We now plot risk/lack-of-resilience instead of resilience itself and force a valid x range.
+        worst = hz.sort_values(["resilience_score_out_of_100", "hazard_stress_score"], ascending=[True, False]).head(18).copy()
+        worst["lack_of_resilience"] = (100 - worst["resilience_score_out_of_100"]).clip(0, 100)
+        worst["case_label"] = worst["postcode"] + " · " + worst["hazard"]
+
+        if worst.empty:
+            st.warning("No resilience evidence cases were generated.")
+        else:
+            fig = px.bar(
+                worst.sort_values("lack_of_resilience", ascending=True),
+                x="lack_of_resilience",
+                y="case_label",
+                color="hazard",
+                orientation="h",
+                title="Lowest resilience evidence cases",
+                template=plotly_template(),
+                hover_data={
+                    "postcode": True,
+                    "hazard": True,
+                    "resilience_score_out_of_100": ":.1f",
+                    "hazard_stress_score": ":.1f",
+                    "supporting_evidence": True,
+                    "lack_of_resilience": ":.1f",
+                    "case_label": False,
+                },
+            )
+            fig.update_layout(
+                height=460,
+                margin=dict(l=10, r=10, t=55, b=10),
+                xaxis=dict(title="Lack of resilience (100 - score)", range=[0, 105]),
+                yaxis=dict(title="Postcode · hazard"),
+            )
+            st.plotly_chart(fig, use_container_width=True)
 
     st.markdown("#### Low-score justification with supporting evidence")
     st.dataframe(
@@ -721,8 +763,32 @@ def render_failure_and_funding_tab(places: pd.DataFrame, pc: pd.DataFrame) -> No
     st.dataframe(funding, use_container_width=True, hide_index=True)
 
 
+
 def render_scenario_finance_tab(places: pd.DataFrame, region: str, mc_runs: int) -> None:
-    st.subheader("Financial losses by scenario")
+    st.subheader("Scenario losses: live baseline separated from what-if stress scenarios")
+
+    live_loss = float(places["total_financial_loss_gbp"].sum())
+    live_risk = float(places["final_risk_score"].mean())
+    live_resilience = float(places["resilience_index"].mean())
+    live_ens = float(places["energy_not_supplied_mw"].sum())
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Live baseline loss", money_m(live_loss))
+    c2.metric("Live baseline risk", f"{live_risk:.1f}/100")
+    c3.metric("Live baseline resilience", f"{live_resilience:.1f}/100")
+    c4.metric("Live baseline ENS", f"{live_ens:.1f} MW")
+
+    st.markdown(
+        """
+        <div class="q1-note">
+        <b>Live / Real-time</b> is now treated as the operational baseline. The chart below excludes it
+        and compares only stress scenarios. Use the sidebar What-if controls to test additional
+        operational assumptions such as stronger wind, heavier rain, more outages or higher EV/V2G support.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
     matrix = scenario_financial_matrix(places, region, mc_runs)
 
     c1, c2 = st.columns(2)
@@ -732,12 +798,13 @@ def render_scenario_finance_tab(places: pd.DataFrame, region: str, mc_runs: int)
             x="scenario",
             y="total_financial_loss_gbp",
             color="mean_risk",
-            title="Scenario financial loss (£)",
+            title="What-if scenario financial loss (£), excluding live baseline",
             template=plotly_template(),
             color_continuous_scale="Turbo",
         )
         fig.update_layout(height=430, margin=dict(l=10, r=10, t=55, b=10))
         st.plotly_chart(fig, use_container_width=True)
+
     with c2:
         fig = px.scatter(
             matrix,
@@ -745,7 +812,7 @@ def render_scenario_finance_tab(places: pd.DataFrame, region: str, mc_runs: int)
             y="mean_resilience",
             size="total_financial_loss_gbp",
             color="scenario",
-            title="Scenario risk-resilience-loss space",
+            title="What-if risk-resilience-loss space",
             template=plotly_template(),
         )
         fig.update_layout(height=430, margin=dict(l=10, r=10, t=55, b=10))
@@ -3924,6 +3991,16 @@ def main() -> None:
         scenario = st.selectbox("Scenario", list(SCENARIOS.keys()), index=0)
         mc_runs = st.slider("Monte Carlo runs", min_value=10, max_value=160, value=40, step=10)
         q1_mc_runs = st.slider("Improved Q1 MC simulations", min_value=100, max_value=5000, value=1000, step=100)
+
+        st.markdown("---")
+        st.markdown("### What-if controls")
+        what_if_enabled = st.checkbox("Enable What-if adjustments", value=False)
+        wind_multiplier = st.slider("Wind multiplier", 0.50, 2.50, 1.00, 0.05)
+        rain_multiplier = st.slider("Rain / flood multiplier", 0.50, 3.50, 1.00, 0.05)
+        outage_multiplier = st.slider("Outage multiplier", 0.50, 4.00, 1.00, 0.05)
+        ev_support_multiplier = st.slider("EV/V2G support multiplier", 0.50, 3.00, 1.00, 0.05)
+        social_stress_multiplier = st.slider("Social stress multiplier", 0.75, 1.75, 1.00, 0.05)
+
         map_mode = st.selectbox("Map layer", ["All", "Risk", "Postcode / Investment", "Outages"], index=0)
 
         st.markdown("---")
