@@ -1,5 +1,5 @@
 """
-SAT-Guard Q1 Advanced Streamlit Dashboard
+SAT-Guard Advanced Streamlit Dashboard
 ========================================
 
 Single-file Streamlit application for a Q1-quality digital twin dashboard.
@@ -59,7 +59,7 @@ import streamlit.components.v1 as components
 # =============================================================================
 
 st.set_page_config(
-    page_title="SAT-Guard Q1 Digital Twin",
+    page_title="SAT-Guard Digital Twin",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -2501,7 +2501,7 @@ def hero(region: str, scenario: str, mc_runs: int, refresh_id: int) -> None:
     st.markdown(
         f"""
         <div class="q1-hero">
-            <div class="q1-title">⚡ SAT-Guard Q1 Grid Digital Twin</div>
+            <div class="q1-title">⚡ SAT-Guard Grid Digital Twin</div>
             <div class="q1-subtitle">
                 Broadcast-style weather simulation, multi-layer grid-risk modelling, social vulnerability,
                 outage intelligence, Monte Carlo uncertainty and investment prioritisation for {html.escape(region)}.
@@ -2839,7 +2839,7 @@ def main() -> None:
         st.session_state.refresh_id = 0
 
     with st.sidebar:
-        st.markdown("## ⚡ SAT-Guard Q1")
+        st.markdown("## ⚡ SAT-Guard")
         st.caption("Digital twin control panel")
 
         region = st.selectbox("Region", list(REGIONS.keys()), index=0)
