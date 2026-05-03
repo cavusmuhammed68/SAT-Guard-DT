@@ -3873,9 +3873,12 @@ def build_investment_recommendations(places: pd.DataFrame, outages: pd.DataFrame
 # =============================================================================
 # ROUTES
 # =============================================================================
+@app.route("/compute")
+def compute():
+    return "Heavy computation here"
 
-@app.route("/")
-def index():
+@app.route("/app")
+def app_main():
     region, scenario, layer, page, mc = get_controls()
     places, outages, grid = get_data(region, scenario, mc)
 
