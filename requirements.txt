@@ -3,3 +3,9 @@ pandas
 numpy
 requests
 openpyxl
+
+gunicorn
+python-dotenv
+flask-cors
+scipy
+pydantic
