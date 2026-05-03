@@ -51,9 +51,6 @@ import pandas as pd
 import requests
 from flask import Flask, Response, jsonify, render_template_string, request
 
-import time
-print("Starting app...")
-time.sleep(2)
 
 app = Flask(__name__)
 
@@ -3876,12 +3873,9 @@ def build_investment_recommendations(places: pd.DataFrame, outages: pd.DataFrame
 # =============================================================================
 # ROUTES
 # =============================================================================
-@app.route("/compute")
-def compute():
-    return "Heavy computation here"
 
-@app.route("/app")
-def app_main():
+@app.route("/")
+def index():
     region, scenario, layer, page, mc = get_controls()
     places, outages, grid = get_data(region, scenario, mc)
 
