@@ -1,17 +1,7 @@
 streamlit
 pandas
 numpy
+plotly
+pydeck
 requests
 openpyxl
-pydeck
-plotly
-
-# ❗ geopandas kaldır
-# geopandas
-# shapely
-# pyogrio
-
-geopandas==0.14.4
-shapely==2.0.3
-fiona==1.9.6
-pyproj==3.6.1
