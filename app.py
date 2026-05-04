@@ -1561,28 +1561,71 @@ def load_imd_summary_cached() -> Tuple[pd.DataFrame, str]:
 
         for sheet_name, df in sheets.items():
             try:
-                part = extract_imd_summary_from_sheet(df, f"{file_path.name} | {sheet_name}")
-                if not part.empty:
+                part = extract_imd_summary_from_sheet(
+                    df,
+                    f"{file_path.name} | {sheet_name}"
+                )
+                if part is not None and not part.empty:
                     all_parts.append(part)
                     source_notes.append(f"{file_path.name}:{sheet_name}")
             except Exception:
                 continue
 
+    # =========================
+    # 🔥 MAIN PROCESSING BLOCK
+    # =========================
     if all_parts:
         summary = pd.concat(all_parts, ignore_index=True)
-        grouped = (
-            summary.groupby("area_key")
-            .agg(
-                area_name=("area_name", "first"),
-                imd_score_0_100=("imd_score_0_100", "mean"),
-                imd_metric_source=("imd_metric_source", "first"),
-                source_file=("source_file", "first"),
-            )
-            .reset_index()
+
+        # ✅ Ensure required columns exist
+        required_cols = ["area_key", "area_name", "imd_score_0_100"]
+        for col in required_cols:
+            if col not in summary.columns:
+                summary[col] = np.nan
+
+        # 🔥 CRITICAL FIX: enforce numeric dtype
+        summary["imd_score_0_100"] = pd.to_numeric(
+            summary["imd_score_0_100"], errors="coerce"
         )
-        source = "; ".join(source_notes[:8])
+
+        # Drop completely invalid rows
+        summary = summary.dropna(subset=["area_key"])
+        summary["area_key"] = summary["area_key"].astype(str).str.lower()
+
+        # 🔥 ROBUST GROUPBY (NO ARROW ERRORS)
+        grouped = (
+            summary.groupby("area_key", as_index=False)
+            .agg({
+                "area_name": "first",
+                "imd_score_0_100": "mean",
+                "imd_metric_source": "first" if "imd_metric_source" in summary.columns else "first",
+                "source_file": "first" if "source_file" in summary.columns else "first",
+            })
+        )
+
+        # 🔥 CLEAN OUTPUT
+        grouped["imd_score_0_100"] = (
+            pd.to_numeric(grouped["imd_score_0_100"], errors="coerce")
+            .fillna(0)
+            .clip(0, 100)
+        )
+
+        # Optional: ranking (Q1 feature)
+        grouped["imd_rank"] = grouped["imd_score_0_100"].rank(ascending=False, method="min")
+
+        source = "; ".join(source_notes[:10])
+
     else:
-        grouped = pd.DataFrame(columns=["area_key", "area_name", "imd_score_0_100", "imd_metric_source", "source_file"])
+        grouped = pd.DataFrame(
+            columns=[
+                "area_key",
+                "area_name",
+                "imd_score_0_100",
+                "imd_metric_source",
+                "source_file",
+                "imd_rank",
+            ]
+        )
         source = "No readable IoD2025 Excel summary found; using configured fallback proxies."
 
     return grouped, source
@@ -1596,7 +1639,13 @@ LAD_NAME_MAPPING = {
     "Hexham": "Northumberland",
 }
 
-def infer_imd_for_place(place: str, region: str, meta: Dict[str, Any], imd_summary: pd.DataFrame) -> Dict[str, Any]:
+def infer_imd_for_place(
+    place: str,
+    region: str,
+    meta: Dict[str, Any],
+    imd_summary: pd.DataFrame
+) -> Dict[str, Any]:
+
     fallback = safe_float(meta.get("vulnerability_proxy"), 45)
 
     if imd_summary is None or imd_summary.empty:
@@ -1608,32 +1657,54 @@ def infer_imd_for_place(place: str, region: str, meta: Dict[str, Any], imd_summa
 
     mapped_name = LAD_NAME_MAPPING.get(place, place)
 
-    tokens = [mapped_name.lower()] + [t.lower() for t in meta.get("authority_tokens", [])]
-    
+    tokens = [mapped_name.lower()] + [
+        str(t).lower() for t in meta.get("authority_tokens", [])
+    ]
+
     region_tokens = [t.lower() for t in REGIONS[region]["tokens"]]
 
+    # =========================
+    # 🎯 DIRECT MATCH
+    # =========================
     for token in tokens:
-        hit = imd_summary[imd_summary["area_key"].str.contains(token, regex=False, na=False)]
+        hit = imd_summary[
+            imd_summary["area_key"].str.contains(token, regex=False, na=False)
+        ]
         if not hit.empty:
+            score = pd.to_numeric(hit["imd_score_0_100"], errors="coerce").mean()
+
             return {
-                "imd_score": round(float(hit["imd_score_0_100"].mean()), 2),
+                "imd_score": round(float(score), 2),
                 "imd_source": str(hit.iloc[0].get("source_file", "IoD2025")),
-                "imd_match": f"matched token: {token}",
+                "imd_match": f"direct match: {token}",
             }
 
+    # =========================
+    # 🌍 REGIONAL FALLBACK
+    # =========================
     regional_scores = []
+
     for token in region_tokens:
-        hit = imd_summary[imd_summary["area_key"].str.contains(token, regex=False, na=False)]
+        hit = imd_summary[
+            imd_summary["area_key"].str.contains(token, regex=False, na=False)
+        ]
         if not hit.empty:
-            regional_scores.extend(hit["imd_score_0_100"].dropna().tolist())
+            regional_scores.extend(
+                pd.to_numeric(hit["imd_score_0_100"], errors="coerce")
+                .dropna()
+                .tolist()
+            )
 
     if regional_scores:
         return {
             "imd_score": round(float(np.mean(regional_scores)), 2),
-            "imd_source": "IoD2025 regional token average",
-            "imd_match": "regional average",
+            "imd_source": "IoD2025 regional aggregation",
+            "imd_match": "regional fallback",
         }
 
+    # =========================
+    # ⚠️ FINAL FALLBACK
+    # =========================
     return {
         "imd_score": fallback,
         "imd_source": "fallback proxy",
