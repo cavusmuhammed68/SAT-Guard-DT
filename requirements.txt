@@ -3,5 +3,5 @@ pandas
 numpy
 requests
 openpyxl
-pydeck
 plotly
+pydeck
