@@ -1374,28 +1374,24 @@ REGIONS = {
 
 @st.cache_data(ttl=3600)
 def load_infrastructure_data():
-    import geopandas as gpd
-    try:
-        base = Path("data/infrastructure")
+    """
+    Loads infrastructure GeoJSON without geopandas (Streamlit Cloud safe)
+    """
+    base = Path("data/infrastructure")
 
-        substations = gpd.read_file(base / "gb_substations_data_281118.geojson").to_crs(epsg=4326)
-        lines = gpd.read_file(base / "GB_Transmission_Network_Data.geojson").to_crs(epsg=4326)
-        gsp = gpd.read_file(base / "GSP_regions_4326_20260209.geojson").to_crs(epsg=4326)
+    substations = load_vector_layer_safe(base / "gb_substations_data_281118.geojson")
+    lines = load_vector_layer_safe(base / "GB_Transmission_Network_Data.geojson")
+    gsp = load_vector_layer_safe(base / "GSP_regions_4326_20260209.geojson")
 
-        return substations, lines, gsp
-    except Exception:
-        return None, None, None
-
+    return substations, lines, gsp
 
 @st.cache_data(ttl=3600)
 def load_flood_data():
-    import geopandas as gpd
-    try:
-        flood = gpd.read_file("data/flood/flood_zones.geojson").to_crs(epsg=4326)
-        return flood
-    except Exception:
-        return None
-    
+    """
+    Loads flood zones safely (no geopandas)
+    """
+    return load_vector_layer_safe(Path("data/flood/flood_zones.geojson"))
+
 def clamp(value: float, low: float, high: float) -> float:
     try:
         return max(low, min(high, float(value)))
