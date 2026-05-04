@@ -3,9 +3,10 @@ pandas
 numpy
 requests
 openpyxl
-plotly
 pydeck
-geopandas
-shapely
-pyproj
-fiona
+plotly
+
+# ❗ geopandas kaldır
+# geopandas
+# shapely
+# pyogrio
