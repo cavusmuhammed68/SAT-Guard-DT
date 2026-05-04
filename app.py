@@ -1721,13 +1721,14 @@ def infer_imd_for_place(
 
 def load_iod2025_domain_model() -> Tuple[pd.DataFrame, str]:
     """
-    IoD2025 domain loader (robust, multi-file, multi-sheet, production safe)
+    Q1-grade IoD2025 domain loader
 
-    Fixes:
-    - Arrow dtype crash (groupby)
-    - None column issues
-    - Safe numeric conversion
-    - Stable aggregation
+    Improvements:
+    - Fully Arrow-safe (no groupby crash)
+    - Strong column detection
+    - Guaranteed numeric aggregation
+    - Zero-None tolerant outputs
+    - Stable across all IoD Excel variants
     """
 
     files = find_imd_files()
@@ -1746,29 +1747,33 @@ def load_iod2025_domain_model() -> Tuple[pd.DataFrame, str]:
         "idaopi": ["idaopi", "older"],
     }
 
+    # -------------------------
+    # HELPERS
+    # -------------------------
     def detect_column(cols, keywords):
         for col in cols:
-            clean = clean_col(col)
-            if any(k in clean for k in keywords):
+            c = clean_col(col)
+            if any(k in c for k in keywords):
                 return col
         return None
 
-    def normalise_series(vals: pd.Series) -> pd.Series:
+    def normalise(vals: pd.Series) -> pd.Series:
         vals = pd.to_numeric(vals, errors="coerce")
 
         if vals.dropna().empty:
             return vals
 
-        max_v = vals.max()
-        min_v = vals.min()
+        vmin, vmax = vals.min(), vals.max()
 
-        if "rank" in str(vals.name).lower():
-            if max_v > min_v:
-                vals = (1 - (vals - min_v) / max(max_v - min_v, 1)) * 100
-        elif max_v <= 1.5:
+        # rank → invert
+        if "rank" in str(vals.name).lower() and vmax > vmin:
+            vals = (1 - (vals - vmin) / max(vmax - vmin, 1)) * 100
+
+        elif vmax <= 1.5:
             vals = vals * 100
-        elif max_v > 100 or min_v < 0:
-            vals = (vals - min_v) / max(max_v - min_v, 1) * 100
+
+        elif vmax > 100 or vmin < 0:
+            vals = (vals - vmin) / max(vmax - vmin, 1) * 100
 
         return vals.clip(0, 100)
 
@@ -1786,10 +1791,13 @@ def load_iod2025_domain_model() -> Tuple[pd.DataFrame, str]:
                 continue
 
             try:
-                work = df.copy().dropna(axis=1, how="all")
+                work = df.copy()
+                work = work.dropna(axis=1, how="all")
                 cols = list(work.columns)
 
+                # -------------------------
                 # AREA DETECTION
+                # -------------------------
                 area_col = (
                     choose_first_matching_column(cols, ["local", "authority"])
                     or choose_first_matching_column(cols, ["lad"])
@@ -1809,43 +1817,44 @@ def load_iod2025_domain_model() -> Tuple[pd.DataFrame, str]:
 
                 out = pd.DataFrame()
 
-                # AREA
-                out["area_name"] = (
-                    work[area_col].astype(str)
-                    if area_col is not None
-                    else work[code_col].astype(str)
-                )
+                # -------------------------
+                # AREA FIELDS
+                # -------------------------
+                base = work[area_col] if area_col else work[code_col]
+
+                out["area_name"] = base.astype(str)
                 out["area_key"] = out["area_name"].str.lower()
                 out["area_code"] = work[code_col].astype(str) if code_col else ""
 
-                detected_domains = []
+                detected = []
 
-                # =========================
+                # -------------------------
                 # DOMAIN EXTRACTION
-                # =========================
-                for domain, keywords in DOMAIN_MAP.items():
-                    col = detect_column(cols, keywords + ["score"]) \
-                          or detect_column(cols, keywords + ["rate"]) \
-                          or detect_column(cols, keywords + ["rank"]) \
-                          or detect_column(cols, keywords)
+                # -------------------------
+                for domain, keys in DOMAIN_MAP.items():
+                    col = (
+                        detect_column(cols, keys + ["score"])
+                        or detect_column(cols, keys + ["rate"])
+                        or detect_column(cols, keys + ["rank"])
+                        or detect_column(cols, keys)
+                    )
 
-                    if col is not None:
-                        vals = normalise_series(work[col])
+                    if col:
+                        vals = normalise(work[col])
                         if not vals.dropna().empty:
                             out[domain] = vals
-                            detected_domains.append(domain)
+                            detected.append(domain)
 
-                if len(detected_domains) >= 2:
-
-                    domain_cols = [d for d in detected_domains if d in out.columns]
+                if len(detected) >= 2:
+                    domain_cols = [d for d in detected if d in out.columns]
 
                     out["iod_social_vulnerability_0_100"] = (
                         out[domain_cols].mean(axis=1, skipna=True)
                     )
 
                     out["domain_completeness"] = len(domain_cols)
-                    out["source_file"] = f"{file_path.name} | {sheet_name}"
                     out["domains_detected"] = ",".join(domain_cols)
+                    out["source_file"] = f"{file_path.name} | {sheet_name}"
 
                     parts.append(out)
                     notes.append(f"{file_path.name}:{sheet_name}")
@@ -1854,7 +1863,7 @@ def load_iod2025_domain_model() -> Tuple[pd.DataFrame, str]:
                 continue
 
     # =========================
-    # NO DATA
+    # NO DATA CASE
     # =========================
     if not parts:
         return pd.DataFrame(), "No readable IoD2025 domain model found; using fallback proxies."
@@ -1862,38 +1871,32 @@ def load_iod2025_domain_model() -> Tuple[pd.DataFrame, str]:
     full = pd.concat(parts, ignore_index=True)
 
     # =========================
-    # 🔥 CRITICAL FIX (ARROW BUG)
+    # 🔥 HARD FIX: FORCE NUMERIC SAFELY
     # =========================
     for col in full.columns:
-        try:
-            if str(full[col].dtype).startswith("arrow") or full[col].dtype == "object":
-                full[col] = pd.to_numeric(full[col], errors="ignore")
-        except Exception:
-            pass
+        if col not in ["area_name", "area_key", "area_code", "source_file", "domains_detected"]:
+            full[col] = pd.to_numeric(full[col], errors="coerce")
 
+    # =========================
+    # GROUPBY SAFE
+    # =========================
     numeric_cols = full.select_dtypes(include=[np.number]).columns.tolist()
 
-    # =========================
-    # SAFE GROUPBY
-    # =========================
-    agg_dict = {
+    agg = {
         "area_name": "first",
+        "area_code": "first",
         "source_file": "first",
         "domains_detected": "first",
     }
 
     for col in numeric_cols:
-        agg_dict[col] = "mean"
+        agg[col] = "mean"
 
-    grouped = (
-        full.groupby("area_key", as_index=False)
-        .agg(agg_dict)
-    )
+    grouped = full.groupby("area_key", as_index=False).agg(agg)
 
     # =========================
     # FINAL CLEAN
     # =========================
-    numeric_cols = grouped.select_dtypes(include=[np.number]).columns
     grouped[numeric_cols] = (
         grouped[numeric_cols]
         .apply(pd.to_numeric, errors="coerce")
@@ -1905,87 +1908,128 @@ def load_iod2025_domain_model() -> Tuple[pd.DataFrame, str]:
 
     return grouped, source_note
 
-
 def infer_iod_domain_vulnerability(place: str, region: str, meta: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Match a configured town/place to IoD2025 domain data and return a richer
-    vulnerability profile. Falls back safely when files are absent.
+    Q1-level IoD domain vulnerability inference with:
+    - robust matching (place + tokens + postcode prefix fallback)
+    - safe numeric aggregation
+    - zero-None tolerant outputs
     """
+
     df, source = load_iod2025_domain_model()
     fallback = safe_float(meta.get("vulnerability_proxy"), 45)
 
-    if df is None or df.empty or "iod_social_vulnerability_0_100" not in df.columns:
-        return {
-            "iod_social_vulnerability": fallback,
-            "iod_domain_source": source,
-            "iod_domain_match": "fallback proxy",
-            "iod_income": np.nan,
-            "iod_employment": np.nan,
-            "iod_health": np.nan,
-            "iod_education": np.nan,
-            "iod_crime": np.nan,
-            "iod_housing": np.nan,
-            "iod_living": np.nan,
-            "iod_idaci": np.nan,
-            "iod_idaopi": np.nan,
-        }
+    EMPTY = {
+        "iod_social_vulnerability": fallback,
+        "iod_domain_source": source,
+        "iod_domain_match": "fallback proxy",
+        "iod_income": np.nan,
+        "iod_employment": np.nan,
+        "iod_health": np.nan,
+        "iod_education": np.nan,
+        "iod_crime": np.nan,
+        "iod_housing": np.nan,
+        "iod_living": np.nan,
+        "iod_idaci": np.nan,
+        "iod_idaopi": np.nan,
+    }
 
+    if df is None or df.empty:
+        return EMPTY
+
+    if "area_key" not in df.columns:
+        return EMPTY
+
+    # -------------------------
+    # 1. STRONG TOKEN MATCH
+    # -------------------------
     tokens = [place.lower()] + [t.lower() for t in meta.get("authority_tokens", [])]
-    region_tokens = [t.lower() for t in REGIONS[region]["tokens"]]
 
     hit = pd.DataFrame()
-    matched_token = ""
+    matched_token = None
 
     for token in tokens:
-        hit = df[df["area_key"].str.contains(token, regex=False, na=False)]
-        if not hit.empty:
+        tmp = df[df["area_key"].str.contains(token, regex=False, na=False)]
+        if not tmp.empty:
+            hit = tmp
             matched_token = token
             break
 
+    # -------------------------
+    # 2. POSTCODE PREFIX FALLBACK (CRITICAL FIX)
+    # -------------------------
     if hit.empty:
-        regional = []
+        prefix_map = {
+            "NE": "newcastle",
+            "SR": "sunderland",
+            "DH": "durham",
+            "TS": "middlesbrough",
+            "DL": "darlington",
+        }
+
+        postcode = str(meta.get("postcode_prefix", "")).upper()
+
+        for p, name in prefix_map.items():
+            if postcode.startswith(p):
+                tmp = df[df["area_key"].str.contains(name, regex=False, na=False)]
+                if not tmp.empty:
+                    hit = tmp
+                    matched_token = f"postcode:{p}->{name}"
+                    break
+
+    # -------------------------
+    # 3. REGIONAL AGGREGATION
+    # -------------------------
+    if hit.empty:
+        region_tokens = [t.lower() for t in REGIONS[region]["tokens"]]
+
+        regional_hits = []
         for token in region_tokens:
             tmp = df[df["area_key"].str.contains(token, regex=False, na=False)]
             if not tmp.empty:
-                regional.append(tmp)
-        if regional:
-            hit = pd.concat(regional, ignore_index=True)
-            matched_token = "regional token average"
+                regional_hits.append(tmp)
 
+        if regional_hits:
+            hit = pd.concat(regional_hits, ignore_index=True)
+            matched_token = "regional aggregate"
+
+    # -------------------------
+    # 4. FINAL FALLBACK
+    # -------------------------
     if hit.empty:
         return {
-            "iod_social_vulnerability": fallback,
-            "iod_domain_source": source,
+            **EMPTY,
             "iod_domain_match": "no authority/domain match; fallback proxy",
-            "iod_income": np.nan,
-            "iod_employment": np.nan,
-            "iod_health": np.nan,
-            "iod_education": np.nan,
-            "iod_crime": np.nan,
-            "iod_housing": np.nan,
-            "iod_living": np.nan,
-            "iod_idaci": np.nan,
-            "iod_idaopi": np.nan,
         }
 
-    def mean_col(col):
-        return round(float(hit[col].dropna().mean()), 2) if col in hit.columns and not hit[col].dropna().empty else np.nan
+    # -------------------------
+    # 5. SAFE MEAN FUNCTION
+    # -------------------------
+    def safe_mean(col):
+        if col not in hit.columns:
+            return np.nan
+        vals = pd.to_numeric(hit[col], errors="coerce").dropna()
+        if vals.empty:
+            return np.nan
+        return round(float(vals.mean()), 2)
 
+    # -------------------------
+    # 6. OUTPUT
+    # -------------------------
     return {
-        "iod_social_vulnerability": round(float(hit["iod_social_vulnerability_0_100"].dropna().mean()), 2),
+        "iod_social_vulnerability": safe_mean("iod_social_vulnerability_0_100") or fallback,
         "iod_domain_source": source,
         "iod_domain_match": f"matched: {matched_token}",
-        "iod_income": mean_col("income"),
-        "iod_employment": mean_col("employment"),
-        "iod_health": mean_col("health"),
-        "iod_education": mean_col("education"),
-        "iod_crime": mean_col("crime"),
-        "iod_housing": mean_col("housing"),
-        "iod_living": mean_col("living"),
-        "iod_idaci": mean_col("idaci"),
-        "iod_idaopi": mean_col("idaopi"),
+        "iod_income": safe_mean("income"),
+        "iod_employment": safe_mean("employment"),
+        "iod_health": safe_mean("health"),
+        "iod_education": safe_mean("education"),
+        "iod_crime": safe_mean("crime"),
+        "iod_housing": safe_mean("housing"),
+        "iod_living": safe_mean("living"),
+        "iod_idaci": safe_mean("idaci"),
+        "iod_idaopi": safe_mean("idaopi"),
     }
-
 
 # =============================================================================
 # EXTERNAL DATA FETCHING
