@@ -1372,6 +1372,30 @@ REGIONS = {
 # BASIC HELPERS
 # =============================================================================
 
+@st.cache_data(ttl=3600)
+def load_infrastructure_data():
+    import geopandas as gpd
+    try:
+        base = Path("data/infrastructure")
+
+        substations = gpd.read_file(base / "gb_substations_data_281118.geojson").to_crs(epsg=4326)
+        lines = gpd.read_file(base / "GB_Transmission_Network_Data.geojson").to_crs(epsg=4326)
+        gsp = gpd.read_file(base / "GSP_regions_4326_20260209.geojson").to_crs(epsg=4326)
+
+        return substations, lines, gsp
+    except Exception:
+        return None, None, None
+
+
+@st.cache_data(ttl=3600)
+def load_flood_data():
+    import geopandas as gpd
+    try:
+        flood = gpd.read_file("data/flood/flood_zones.geojson").to_crs(epsg=4326)
+        return flood
+    except Exception:
+        return None
+    
 def clamp(value: float, low: float, high: float) -> float:
     try:
         return max(low, min(high, float(value)))
@@ -3349,7 +3373,9 @@ def make_storm_frames(grid: pd.DataFrame, hours: int = 24) -> pd.DataFrame:
 
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
-def render_pydeck_map(region: str, places: pd.DataFrame, outages: pd.DataFrame, pc: pd.DataFrame, grid: pd.DataFrame, map_mode: str) -> None:
+def render_pydeck_map(region: str, places: pd.DataFrame, outages: pd.DataFrame,
+                     pc: pd.DataFrame, grid: pd.DataFrame, map_mode: str) -> None:
+
     try:
         import pydeck as pdk
     except Exception:
@@ -3358,6 +3384,13 @@ def render_pydeck_map(region: str, places: pd.DataFrame, outages: pd.DataFrame, 
 
     center = REGIONS[region]["center"]
 
+    # ✅ LOAD DATA (SAFE)
+    substations, lines, gsp = load_infrastructure_data()
+    flood = load_flood_data()
+
+    # =========================
+    # HELPERS
+    # =========================
     def rgba_risk(v, alpha=210):
         v = clamp(v, 0, 100)
         if v >= 75:
@@ -3372,106 +3405,91 @@ def render_pydeck_map(region: str, places: pd.DataFrame, outages: pd.DataFrame, 
     # DATA PREP
     # =========================
     grid_map = grid.copy()
-    grid_map["risk_score"] = pd.to_numeric(grid_map.get("risk_score"), errors="coerce").fillna(0).clip(0, 100)
+    grid_map["risk_score"] = pd.to_numeric(grid_map.get("risk_score"), errors="coerce").fillna(0)
     grid_map["financial_loss_gbp"] = pd.to_numeric(grid_map.get("financial_loss_gbp"), errors="coerce").fillna(0)
     grid_map["energy_not_supplied_mw"] = pd.to_numeric(grid_map.get("energy_not_supplied_mw"), errors="coerce").fillna(0)
+
     grid_map["risk_color"] = grid_map["risk_score"].apply(lambda x: rgba_risk(x, 220))
-    grid_map["risk_elevation"] = 1400 + grid_map["risk_score"] * 135
+    grid_map["risk_elevation"] = 1200 + grid_map["risk_score"] * 120
 
     places_map = places.copy()
-    places_map["final_risk_score"] = pd.to_numeric(places_map.get("final_risk_score"), errors="coerce").fillna(0).clip(0, 100)
-    places_map["resilience_index"] = pd.to_numeric(places_map.get("resilience_index"), errors="coerce").fillna(0).clip(0, 100)
-    places_map["energy_not_supplied_mw"] = pd.to_numeric(places_map.get("energy_not_supplied_mw"), errors="coerce").fillna(0)
+    places_map["final_risk_score"] = pd.to_numeric(places_map.get("final_risk_score"), errors="coerce").fillna(0)
+    places_map["resilience_index"] = pd.to_numeric(places_map.get("resilience_index"), errors="coerce").fillna(0)
     places_map["estimated_load_mw"] = pd.to_numeric(places_map.get("estimated_load_mw"), errors="coerce").fillna(0)
-    places_map["total_financial_loss_gbp"] = pd.to_numeric(places_map.get("total_financial_loss_gbp"), errors="coerce").fillna(0)
-    places_map["place_color"] = places_map["final_risk_score"].apply(lambda x: rgba_risk(x, 255))
-    places_map["place_radius"] = 4200 + places_map["final_risk_score"] * 130
 
-    # =========================
-    # LOAD REAL INFRASTRUCTURE / FLOOD DATA
-    # =========================
-    substations_geojson = load_vector_layer_safe(INFRA_DIR / "substations.geojson")
-    transmission_geojson = load_vector_layer_safe(INFRA_DIR / "transmission_lines.geojson")
-    gsp_geojson = load_vector_layer_safe(INFRA_DIR / "gsp_regions.geojson")
-    flood_geojson = load_vector_layer_safe(FLOOD_DIR / "flood_zones.geojson")
+    places_map["place_color"] = places_map["final_risk_score"].apply(lambda x: rgba_risk(x, 255))
+    places_map["place_radius"] = 4000 + places_map["final_risk_score"] * 120
 
     layers = []
 
     # =========================
-    # SATELLITE + GSP REGIONS
+    # GSP REGIONS
     # =========================
-    if geojson_has_features(gsp_geojson):
+    if gsp is not None:
         layers.append(
             pdk.Layer(
                 "GeoJsonLayer",
-                data=gsp_geojson,
-                stroked=True,
+                data=gsp.__geo_interface__,
                 filled=True,
-                get_fill_color=[56, 189, 248, 28],
+                get_fill_color=[56, 189, 248, 25],
                 get_line_color=[56, 189, 248, 120],
-                line_width_min_pixels=1,
                 pickable=True,
-                auto_highlight=True,
             )
         )
 
     # =========================
-    # REAL TRANSMISSION LINES
+    # TRANSMISSION LINES
     # =========================
-    if geojson_has_features(transmission_geojson):
+    if lines is not None:
+        lines["path"] = lines.geometry.apply(
+            lambda g: [[x, y] for x, y in g.coords] if g else []
+        )
+
         layers.append(
             pdk.Layer(
-                "GeoJsonLayer",
-                data=transmission_geojson,
-                stroked=True,
-                filled=False,
-                get_line_color=[255, 255, 255, 210],
-                get_line_width=4,
-                line_width_min_pixels=2,
-                pickable=True,
-                auto_highlight=True,
+                "PathLayer",
+                data=lines,
+                get_path="path",
+                get_width=3,
+                get_color=[255, 255, 255, 160],
             )
         )
 
     # =========================
-    # REAL SUBSTATIONS
+    # SUBSTATIONS
     # =========================
-    if geojson_has_features(substations_geojson):
+    if substations is not None:
+        substations["lon"] = substations.geometry.x
+        substations["lat"] = substations.geometry.y
+
+        layers.append(
+            pdk.Layer(
+                "ScatterplotLayer",
+                data=substations,
+                get_position="[lon, lat]",
+                get_radius=1000,
+                get_fill_color=[0, 200, 255, 200],
+                pickable=True,
+            )
+        )
+
+    # =========================
+    # FLOOD
+    # =========================
+    if flood is not None:
         layers.append(
             pdk.Layer(
                 "GeoJsonLayer",
-                data=substations_geojson,
-                stroked=True,
+                data=flood.__geo_interface__,
+                opacity=0.25,
                 filled=True,
-                get_fill_color=[59, 130, 246, 210],
-                get_line_color=[255, 255, 255, 220],
-                point_radius_min_pixels=4,
-                point_radius_scale=40,
+                get_fill_color=[0, 100, 255, 80],
                 pickable=True,
-                auto_highlight=True,
             )
         )
 
     # =========================
-    # FLOOD RASTER / POLYGON OVERLAY
-    # =========================
-    if geojson_has_features(flood_geojson):
-        layers.append(
-            pdk.Layer(
-                "GeoJsonLayer",
-                data=flood_geojson,
-                stroked=True,
-                filled=True,
-                get_fill_color=[37, 99, 235, 72],
-                get_line_color=[96, 165, 250, 150],
-                line_width_min_pixels=1,
-                pickable=True,
-                auto_highlight=True,
-            )
-        )
-
-    # =========================
-    # 3D GRID RISK
+    # GRID RISK
     # =========================
     if map_mode in ["All", "Risk"]:
         layers.append(
@@ -3480,39 +3498,19 @@ def render_pydeck_map(region: str, places: pd.DataFrame, outages: pd.DataFrame, 
                 data=grid_map,
                 get_position="[lon, lat]",
                 get_elevation="risk_elevation",
-                radius=3600,
+                radius=3000,
                 get_fill_color="risk_color",
                 extruded=True,
-                coverage=0.76,
-                opacity=0.78,
+                opacity=0.8,
                 pickable=True,
-                auto_highlight=True,
-            )
-        )
-
-        layers.append(
-            pdk.Layer(
-                "HeatmapLayer",
-                data=grid_map,
-                get_position="[lon, lat]",
-                get_weight="risk_score",
-                radius_pixels=75,
-                intensity=1.25,
-                threshold=0.08,
-                opacity=0.32,
             )
         )
 
     # =========================
-    # INFRASTRUCTURE LOAD TOWERS
+    # INFRA LOAD
     # =========================
     infra = places_map.copy()
-    infra["infra_height"] = 900 + infra["estimated_load_mw"] * 15
-    infra["infra_color"] = infra["estimated_load_mw"].apply(
-        lambda v: [239, 68, 68, 235] if v >= 150 else
-        [245, 158, 11, 225] if v >= 90 else
-        [59, 130, 246, 215]
-    )
+    infra["infra_height"] = 800 + infra["estimated_load_mw"] * 12
 
     layers.append(
         pdk.Layer(
@@ -3520,103 +3518,37 @@ def render_pydeck_map(region: str, places: pd.DataFrame, outages: pd.DataFrame, 
             data=infra,
             get_position="[lon, lat]",
             get_elevation="infra_height",
-            radius=2200,
-            get_fill_color="infra_color",
+            radius=2000,
+            get_fill_color=[255, 140, 0, 160],
             extruded=True,
-            opacity=0.55,
-            pickable=True,
-            auto_highlight=True,
+            opacity=0.5,
         )
     )
 
     # =========================
-    # EV / V2G HOTSPOTS
-    # =========================
-    if "v2g_support_mw" in places_map.columns or "total_storage_support" in places_map.columns:
-        ev = places_map.copy()
-        ev["v2g_support_mw"] = pd.to_numeric(ev.get("v2g_support_mw"), errors="coerce").fillna(0)
-        ev["total_storage_support"] = pd.to_numeric(ev.get("total_storage_support"), errors="coerce").fillna(0)
-        ev["ev_radius"] = 2800 + ev["total_storage_support"].clip(0, 300) * 34
-
-        layers.append(
-            pdk.Layer(
-                "ScatterplotLayer",
-                data=ev,
-                get_position="[lon, lat]",
-                get_radius="ev_radius",
-                get_fill_color=[34, 197, 94, 135],
-                stroked=True,
-                get_line_color=[187, 247, 208, 210],
-                line_width_min_pixels=1.5,
-                opacity=0.62,
-                pickable=True,
-                auto_highlight=True,
-            )
-        )
-
-    # =========================
     # OUTAGES
     # =========================
-    if map_mode in ["All", "Outages"] and outages is not None and not outages.empty:
+    if outages is not None and not outages.empty:
         outages_map = outages.copy()
-        outages_map["affected_customers"] = pd.to_numeric(outages_map.get("affected_customers"), errors="coerce").fillna(0)
-        outages_map["outage_color"] = outages_map["affected_customers"].apply(
-            lambda c: [255, 0, 0, 225] if c > 500 else [255, 255, 255, 185]
-        )
-        outages_map["outage_radius"] = 2300 + outages_map["affected_customers"].clip(0, 1200) * 18
+        outages_map["affected_customers"] = pd.to_numeric(
+            outages_map.get("affected_customers"), errors="coerce"
+        ).fillna(0)
+
+        outages_map["radius"] = 2000 + outages_map["affected_customers"] * 10
 
         layers.append(
             pdk.Layer(
                 "ScatterplotLayer",
                 data=outages_map,
                 get_position="[longitude, latitude]",
-                get_fill_color="outage_color",
-                get_radius="outage_radius",
-                opacity=0.74,
+                get_radius="radius",
+                get_fill_color=[255, 0, 0, 200],
                 pickable=True,
-                auto_highlight=True,
-                stroked=True,
-                get_line_color=[239, 68, 68, 255],
-                line_width_min_pixels=2,
             )
         )
 
     # =========================
-    # TIME EVOLUTION: STORM PROGRESSION
-    # =========================
-    if map_mode in ["All", "Risk"]:
-        storm_frames = make_storm_frames(grid_map, hours=24)
-
-        if not storm_frames.empty:
-            selected_hour = st.slider(
-                "Storm progression hour",
-                min_value=0,
-                max_value=24,
-                value=12,
-                step=3,
-                key="storm_progression_hour",
-            )
-
-            frame = storm_frames[storm_frames["storm_hour"] == selected_hour].copy()
-
-            layers.append(
-                pdk.Layer(
-                    "ColumnLayer",
-                    data=frame,
-                    get_position="[lon, lat]",
-                    get_elevation="storm_elevation",
-                    radius=2100,
-                    get_fill_color="storm_color",
-                    extruded=True,
-                    coverage=0.56,
-                    opacity=0.58,
-                    pickable=True,
-                    auto_highlight=True,
-                )
-            )
-
-    # =========================
-    # MAIN PLACE NODES
+    # MAIN NODES
     # =========================
     layers.append(
         pdk.Layer(
@@ -3625,42 +3557,32 @@ def render_pydeck_map(region: str, places: pd.DataFrame, outages: pd.DataFrame, 
             get_position="[lon, lat]",
             get_fill_color="place_color",
             get_radius="place_radius",
-            opacity=0.94,
             pickable=True,
-            auto_highlight=True,
             stroked=True,
-            get_line_color=[255, 255, 255, 230],
-            line_width_min_pixels=1.5,
+            get_line_color=[255, 255, 255, 200],
         )
     )
 
+    # =========================
+    # VIEW
+    # =========================
     view_state = pdk.ViewState(
         latitude=center["lat"],
         longitude=center["lon"],
         zoom=center["zoom"],
-        pitch=62,
-        bearing=-32,
+        pitch=60,
+        bearing=-30,
     )
 
+    # ✅ TOOLTIP SAFE VERSION
     tooltip = {
         "html": """
         <b>{place}</b><br/>
-        Risk: {final_risk_score}{risk_score}<br/>
+        Risk: {final_risk_score}<br/>
         Resilience: {resilience_index}<br/>
-        ENS: {energy_not_supplied_mw} MW<br/>
-        Loss: £{total_financial_loss_gbp}{financial_loss_gbp}<br/>
-        Load: {estimated_load_mw} MW<br/>
-        V2G: {v2g_support_mw} MW<br/>
-        Storage: {total_storage_support} MW<br/>
-        Affected customers: {affected_customers}
+        Load: {estimated_load_mw} MW
         """,
-        "style": {
-            "backgroundColor": "rgba(2,6,23,0.94)",
-            "color": "white",
-            "border": "1px solid rgba(148,163,184,0.35)",
-            "borderRadius": "10px",
-            "padding": "10px",
-        },
+        "style": {"backgroundColor": "black", "color": "white"},
     }
 
     deck = pdk.Deck(
@@ -3671,19 +3593,6 @@ def render_pydeck_map(region: str, places: pd.DataFrame, outages: pd.DataFrame, 
     )
 
     st.pydeck_chart(deck, use_container_width=True)
-
-    st.markdown(
-        """
-        <div class="note">
-        <b>Satellite + infrastructure overlay:</b> this view combines satellite context,
-        electricity infrastructure, flood exposure, outage points, 3D grid-risk columns,
-        EV/V2G storage hotspots and storm time evolution. Column height represents
-        risk intensity or infrastructure load; blue flood polygons indicate exposed areas.
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
 
 # =============================================================================
 # BBC / WXCHARTS STYLE ANIMATED COMPONENT
