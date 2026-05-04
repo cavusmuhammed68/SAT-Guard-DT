@@ -4207,34 +4207,45 @@ def main() -> None:
 
         region = st.selectbox("Region", list(REGIONS.keys()), index=0)
 
-        # 🔥 SCENARIO REMOVED → ALWAYS LIVE
+        # 🔥 DEFAULT = LIVE
         scenario = "Live / Real-time"
 
         mc_runs = st.slider("MC runs", 10, 160, 40, 10)
         q1_mc_runs = st.slider("MC simulations", 100, 5000, 1000, 100)
 
         # =========================
-        # ✅ SIMPLIFIED WHAT-IF
+        # ✅ WHAT-IF (CHECKBOX BASED)
         # =========================
         st.markdown("---")
         st.markdown("### What-if scenario")
 
-        what_if_mode = st.selectbox(
-            "Stress level",
-            [
-                "Baseline (Observed conditions)",
-                "Moderate disruption",
-                "Severe compound stress",
-            ]
-        )
+        what_if_enabled = st.checkbox("Enable hazard scenario")
 
-        WHAT_IF_MAP = {
-            "Baseline (Observed conditions)": "Live / Real-time",
-            "Moderate disruption": "Extreme wind",
-            "Severe compound stress": "Compound extreme",
-        }
+        if what_if_enabled:
+            hazard_choice = st.selectbox(
+                "Select hazard",
+                [
+                    "Storm (wind)",
+                    "Flood (heavy rain)",
+                    "Heatwave",
+                    "Compound hazard",
+                    "Drought"
+                ]
+            )
 
-        scenario_for_engine = WHAT_IF_MAP[what_if_mode]
+            WHAT_IF_MAP = {
+                "Storm (wind)": "Extreme wind",
+                "Flood (heavy rain)": "Flood",
+                "Heatwave": "Heatwave",
+                "Compound hazard": "Compound extreme",
+                "Drought": "Renewable drought",
+            }
+
+            scenario_for_engine = WHAT_IF_MAP[hazard_choice]
+
+        else:
+            scenario_for_engine = "Live / Real-time"
+            hazard_choice = "Live conditions"
 
         # Map
         map_mode = st.selectbox(
@@ -4262,12 +4273,12 @@ def main() -> None:
         )
 
     # =========================
-    # HERO → ALWAYS SHOW LIVE
+    # HERO (ALWAYS SHOW LIVE LABEL)
     # =========================
     hero(region, scenario, mc_runs, st.session_state.refresh_id)
 
     # =========================
-    # 🔥 DATA CALL USES WHAT-IF
+    # DATA (USES WHAT-IF)
     # =========================
     with st.spinner("Running digital twin model..."):
         places, outages, grid = get_data_cached(region, scenario_for_engine, mc_runs)
@@ -4306,10 +4317,10 @@ def main() -> None:
     ])
 
     with tabs[0]:
-        overview_tab(places, pc, scenario)
+        overview_tab(places, pc, scenario_for_engine)
 
     with tabs[1]:
-        bbc_tab(region, scenario, places, grid)
+        bbc_tab(region, scenario_for_engine, places, grid)
 
     with tabs[2]:
         render_hazard_resilience_tab(places, pc)
