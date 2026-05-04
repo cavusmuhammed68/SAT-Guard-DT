@@ -3276,103 +3276,181 @@ def render_pydeck_map(region: str, places: pd.DataFrame, outages: pd.DataFrame, 
 
     center = REGIONS[region]["center"]
 
-    places_map = places.copy()
-    places_map["color"] = places_map["final_risk_score"].apply(risk_colour)
-    places_map["radius"] = 4500 + places_map["final_risk_score"].clip(0, 100) * 130
+    def rgba_risk(v, alpha=210):
+        v = clamp(v, 0, 100)
+        if v >= 75:
+            return [239, 68, 68, alpha]
+        if v >= 55:
+            return [249, 115, 22, alpha]
+        if v >= 35:
+            return [234, 179, 8, alpha]
+        return [34, 197, 94, alpha]
+
+    def rgba_resilience(v, alpha=210):
+        v = clamp(v, 0, 100)
+        if v >= 80:
+            return [34, 197, 94, alpha]
+        if v >= 60:
+            return [56, 189, 248, alpha]
+        if v >= 40:
+            return [234, 179, 8, alpha]
+        return [239, 68, 68, alpha]
 
     grid_map = grid.copy()
-    grid_map["color"] = grid_map["risk_score"].apply(lambda x: [56, 189, 248, int(35 + clamp(x, 0, 100) * 1.2)])
-    grid_map["radius"] = 2800 + grid_map["risk_score"].clip(0, 100) * 60
+    grid_map["risk_score"] = pd.to_numeric(grid_map.get("risk_score"), errors="coerce").fillna(0).clip(0, 100)
+    grid_map["resilience_index"] = pd.to_numeric(grid_map.get("resilience_index"), errors="coerce").fillna(0).clip(0, 100)
+    grid_map["energy_not_supplied_mw"] = pd.to_numeric(grid_map.get("energy_not_supplied_mw"), errors="coerce").fillna(0)
+    grid_map["financial_loss_gbp"] = pd.to_numeric(grid_map.get("financial_loss_gbp"), errors="coerce").fillna(0)
 
-    pc_map = pc.copy()
-    if not pc_map.empty:
-        pc_map["color"] = pc_map["investment_priority"].apply(priority_colour)
-        pc_map["radius"] = 3200 + pc_map["recommendation_score"].clip(0, 100) * 105
+    grid_map["risk_color"] = grid_map["risk_score"].apply(lambda x: rgba_risk(x, 220))
+    grid_map["resilience_color"] = grid_map["resilience_index"].apply(lambda x: rgba_resilience(x, 210))
+    grid_map["risk_elevation"] = 1200 + grid_map["risk_score"] * 115
+    grid_map["loss_elevation"] = 900 + (grid_map["financial_loss_gbp"] / max(grid_map["financial_loss_gbp"].max(), 1)) * 10000
+
+    places_map = places.copy()
+    places_map["final_risk_score"] = pd.to_numeric(places_map.get("final_risk_score"), errors="coerce").fillna(0).clip(0, 100)
+    places_map["energy_not_supplied_mw"] = pd.to_numeric(places_map.get("energy_not_supplied_mw"), errors="coerce").fillna(0)
+    places_map["place_color"] = places_map["final_risk_score"].apply(lambda x: rgba_risk(x, 255))
+    places_map["place_radius"] = 4500 + places_map["final_risk_score"] * 120
 
     layers = []
 
     if map_mode in ["All", "Risk"]:
         layers.append(
             pdk.Layer(
-                "ScatterplotLayer",
+                "ColumnLayer",
                 data=grid_map,
                 get_position="[lon, lat]",
-                get_fill_color="color",
-                get_radius="radius",
+                get_elevation="risk_elevation",
+                elevation_scale=1,
+                radius=3600,
+                get_fill_color="risk_color",
                 pickable=True,
-                opacity=0.38,
+                auto_highlight=True,
+                extruded=True,
+                coverage=0.78,
+                opacity=0.82,
             )
         )
+
+        layers.append(
+            pdk.Layer(
+                "HeatmapLayer",
+                data=grid_map,
+                get_position="[lon, lat]",
+                get_weight="risk_score",
+                radius_pixels=70,
+                intensity=1.15,
+                threshold=0.08,
+                opacity=0.34,
+            )
+        )
+
         layers.append(
             pdk.Layer(
                 "ScatterplotLayer",
                 data=places_map,
                 get_position="[lon, lat]",
-                get_fill_color="color",
-                get_radius="radius",
+                get_fill_color="place_color",
+                get_radius="place_radius",
                 pickable=True,
-                opacity=0.88,
+                auto_highlight=True,
+                opacity=0.95,
+                stroked=True,
+                get_line_color=[255, 255, 255, 230],
+                line_width_min_pixels=1.5,
             )
         )
 
-    if map_mode in ["All", "Postcode / Investment"] and not pc_map.empty:
+    if map_mode in ["All", "Postcode / Investment"] and pc is not None and not pc.empty:
+        pc_map = pc.copy()
+        pc_map["recommendation_score"] = pd.to_numeric(pc_map.get("recommendation_score"), errors="coerce").fillna(0).clip(0, 100)
+        pc_map["postcode_color"] = pc_map["recommendation_score"].apply(lambda x: rgba_risk(x, 220))
+        pc_map["postcode_elevation"] = 800 + pc_map["recommendation_score"] * 95
+
         layers.append(
             pdk.Layer(
-                "ScatterplotLayer",
+                "ColumnLayer",
                 data=pc_map,
                 get_position="[lon, lat]",
-                get_fill_color="color",
-                get_radius="radius",
+                get_elevation="postcode_elevation",
+                radius=2600,
+                get_fill_color="postcode_color",
                 pickable=True,
-                opacity=0.77,
+                auto_highlight=True,
+                extruded=True,
+                coverage=0.65,
+                opacity=0.72,
             )
         )
 
-    if map_mode in ["All", "Outages"] and not outages.empty:
+    if map_mode in ["All", "Outages"] and outages is not None and not outages.empty:
         outages_map = outages.copy()
-        outages_map["color"] = [[255, 255, 255, 225]] * len(outages_map)
-        outages_map["radius"] = 2500 + pd.to_numeric(outages_map["affected_customers"], errors="coerce").fillna(0).clip(0, 1000) * 16
+        outages_map["affected_customers"] = pd.to_numeric(outages_map.get("affected_customers"), errors="coerce").fillna(0)
+        outages_map["outage_color"] = [[255, 255, 255, 235]] * len(outages_map)
+        outages_map["outage_radius"] = 2200 + outages_map["affected_customers"].clip(0, 1200) * 18
+
         layers.append(
             pdk.Layer(
                 "ScatterplotLayer",
                 data=outages_map,
                 get_position="[longitude, latitude]",
-                get_fill_color="color",
-                get_radius="radius",
+                get_fill_color="outage_color",
+                get_radius="outage_radius",
                 pickable=True,
-                opacity=0.66,
+                auto_highlight=True,
+                opacity=0.72,
+                stroked=True,
+                get_line_color=[239, 68, 68, 255],
+                line_width_min_pixels=2,
             )
         )
-
-    tooltip = {
-        "html": """
-        <b>{place}{postcode}{outage_reference}</b><br/>
-        Risk: {final_risk_score}{risk_score}<br/>
-        Resilience: {resilience_index}{resilience_score}<br/>
-        ENS: {energy_not_supplied_mw} MW<br/>
-        Financial loss: £{total_financial_loss_gbp}{financial_loss_gbp}<br/>
-        Priority: {investment_priority}
-        """,
-        "style": {"backgroundColor": "rgba(15,23,42,0.95)", "color": "white"},
-    }
 
     view_state = pdk.ViewState(
         latitude=center["lat"],
         longitude=center["lon"],
-        zoom=center["zoom"] - 1,
-        pitch=42,
-        bearing=-8,
+        zoom=center["zoom"],
+        pitch=58,
+        bearing=-28,
     )
 
-    st.pydeck_chart(
-        pdk.Deck(
-            map_style="mapbox://styles/mapbox/dark-v10",
-            initial_view_state=view_state,
-            layers=layers,
-            tooltip=tooltip,
-        ),
-        use_container_width=True,
-        height=680,
+    tooltip = {
+        "html": """
+        <b>{place}{postcode}</b><br/>
+        Risk: {risk_score}{final_risk_score}<br/>
+        Resilience: {resilience_index}<br/>
+        ENS: {energy_not_supplied_mw} MW<br/>
+        Financial loss: £{financial_loss_gbp}<br/>
+        Priority: {investment_priority}<br/>
+        Affected customers: {affected_customers}
+        """,
+        "style": {
+            "backgroundColor": "rgba(2,6,23,0.92)",
+            "color": "white",
+            "border": "1px solid rgba(148,163,184,0.35)",
+            "borderRadius": "10px",
+            "padding": "10px",
+        },
+    }
+
+    deck = pdk.Deck(
+        layers=layers,
+        initial_view_state=view_state,
+        map_style="mapbox://styles/mapbox/dark-v11",
+        tooltip=tooltip,
+    )
+
+    st.pydeck_chart(deck, use_container_width=True)
+
+    st.markdown(
+        """
+        <div class="note">
+        <b>3D spatial interpretation:</b> column height represents modelled grid risk or investment pressure.
+        Colour shows severity: green = lower risk, yellow/orange = elevated stress, red = severe stress.
+        The transparent heat layer shows regional clustering of systemic risk.
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
 
