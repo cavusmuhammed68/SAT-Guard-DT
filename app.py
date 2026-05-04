@@ -1,8 +1,8 @@
 """
-SAT-Guard Q1 Advanced Streamlit Dashboard
+SAT-Guard Advanced Streamlit Dashboard
 ========================================
 
-Single-file Streamlit application for a Q1-quality digital twin dashboard.
+Single-file Streamlit application for a digital twin dashboard.
 
 This file is intentionally self-contained:
 - Live/fallback weather and outage ingestion
@@ -56,7 +56,7 @@ import streamlit.components.v1 as components
 
 
 # =============================================================================
-# Q1+ NATURAL HAZARD, SOCIO-ECONOMIC, EV/V2G AND VALIDATION EXTENSIONS
+# NATURAL HAZARD, SOCIO-ECONOMIC, EV/V2G AND VALIDATION EXTENSIONS
 # =============================================================================
 
 HAZARD_TYPES = {
@@ -549,7 +549,7 @@ def render_iod2025_data_quality_tab(places: pd.DataFrame) -> None:
 
     st.markdown(
         f"""
-        <div class="q1-note">
+        <div class="note">
         <b>IoD source status:</b> {source}<br>
         The app now scans <code>data/iod2025</code>, <code>data</code>, project root and Streamlit Cloud mount paths.
         When domain files are matched, social vulnerability is calculated from Income, Employment, Health,
@@ -708,7 +708,7 @@ def render_ev_v2g_tab(places: pd.DataFrame, scenario: str) -> None:
 
     st.markdown(
         """
-        <div class="q1-note">
+        <div class="note">
         <b>EV/V2G interpretation:</b> Parked EVs are treated as distributed batteries.
         Only a fraction is assumed V2G-enabled and practically coupled to charging substations.
         The model estimates emergency MWh, MW export support, ENS offset and avoided-loss value.
@@ -780,7 +780,7 @@ def render_scenario_finance_tab(places: pd.DataFrame, region: str, mc_runs: int)
 
     st.markdown(
         """
-        <div class="q1-note">
+        <div class="note">
         <b>Live / Real-time</b> is now treated as the operational baseline. The chart below excludes it
         and compares only stress scenarios. Use the sidebar What-if controls to test additional
         operational assumptions such as stronger wind, heavier rain, more outages or higher EV/V2G support.
@@ -861,7 +861,7 @@ def render_improved_monte_carlo_tab(places: pd.DataFrame, simulations: int) -> N
 
     st.markdown(
         """
-        <div class="q1-note">
+        <div class="note">
         <b>Monte Carlo upgrade:</b> this version uses a shared storm-shock variable so wind, rain,
         outage count and ENS move together instead of being independently perturbed. Demand uses a
         triangular distribution and restoration losses use a lognormal tail, giving a more realistic
@@ -881,7 +881,7 @@ def render_validation_tab(places: pd.DataFrame, scenario: str) -> None:
     st.markdown("#### Why this is not a black-box model")
     st.markdown(
         """
-        <div class="q1-card">
+        <div class="card">
         <p style="color:#cbd5e1;">
         The application is intentionally transparent. It exposes the intermediate variables
         used for risk, resilience, social vulnerability, financial loss, failure probability,
@@ -904,7 +904,7 @@ def render_validation_tab(places: pd.DataFrame, scenario: str) -> None:
 # =============================================================================
 
 st.set_page_config(
-    page_title="SAT-Guard Q1 Digital Twin",
+    page_title="SAT-Guard Digital Twin",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -945,7 +945,7 @@ APP_CSS = """
     background: rgba(2, 6, 23, 0.96);
     border-right: 1px solid rgba(148, 163, 184, 0.18);
 }
-.q1-hero {
+.hero {
     border: 1px solid rgba(148,163,184,0.20);
     background:
         linear-gradient(135deg, rgba(14,165,233,0.20), rgba(168,85,247,0.10)),
@@ -955,19 +955,19 @@ APP_CSS = """
     box-shadow: 0 24px 80px rgba(0,0,0,0.32);
     margin-bottom: 18px;
 }
-.q1-title {
+.title {
     font-size: 38px;
     font-weight: 950;
     letter-spacing: -0.05em;
     color: white;
     margin-bottom: 4px;
 }
-.q1-subtitle {
+.subtitle {
     color: #cbd5e1;
     font-size: 15px;
     line-height: 1.5;
 }
-.q1-chip {
+.chip {
     display: inline-block;
     margin: 4px 6px 0 0;
     border-radius: 999px;
@@ -978,28 +978,28 @@ APP_CSS = """
     font-weight: 800;
     font-size: 12px;
 }
-.q1-card {
+.card {
     border: 1px solid rgba(148,163,184,0.18);
     background: rgba(15,23,42,0.72);
     border-radius: 24px;
     padding: 18px;
     box-shadow: 0 24px 70px rgba(0,0,0,0.26);
 }
-.q1-note {
+.note {
     border: 1px solid rgba(56,189,248,0.25);
     background: rgba(56,189,248,0.09);
     border-radius: 18px;
     padding: 14px 16px;
     color: #dbeafe;
 }
-.q1-warning {
+.warning {
     border: 1px solid rgba(249,115,22,0.30);
     background: rgba(249,115,22,0.10);
     border-radius: 18px;
     padding: 14px 16px;
     color: #fed7aa;
 }
-.q1-formula {
+.formula {
     border-left: 4px solid #38bdf8;
     background: rgba(2,6,23,0.50);
     padding: 12px 14px;
@@ -1342,7 +1342,7 @@ def resilience_label(score: float) -> str:
 
 def requests_json(url: str, params: Dict[str, Any] = None, timeout: int = 20) -> Dict[str, Any]:
     try:
-        headers = {"User-Agent": "sat-guard-q1-streamlit/2.0"}
+        headers = {"User-Agent": "sat-guard-streamlit/2.0"}
         response = requests.get(url, params=params or {}, headers=headers, timeout=timeout)
         response.raise_for_status()
         return response.json()
@@ -1721,7 +1721,7 @@ def infer_imd_for_place(
 
 def load_iod2025_domain_model() -> Tuple[pd.DataFrame, str]:
     """
-    Q1-level IoD2025 domain loader (robust, multi-file, multi-sheet, production safe)
+    IoD2025 domain loader (robust, multi-file, multi-sheet, production safe)
 
     Fixes:
     - Arrow dtype crash (groupby)
@@ -3379,7 +3379,7 @@ input[type=range] {{
     <div id="labels"></div>
 
     <div class="hud" id="top">
-        <div class="title">Q1 forecast simulation and grid resilience overlay</div>
+        <div class="title">Forecast simulation and grid resilience overlay</div>
         <div class="sub">Scenario: <b>{html.escape(scenario)}</b><br>Visual mode: <b>{html.escape(payload["hazard_mode"])}</b><br>Animated precipitation, pressure contours, wind vectors, fronts and local risk intensity.</div>
     </div>
 
@@ -3392,9 +3392,11 @@ input[type=range] {{
     </div>
 
     <div class="blocks">
-        <div class="bbc"><span>B</span><span>B</span><span>C</span></div>
-        <div class="word">WEATHER</div>
+        <div class="bbc"><span>S</span><span>A</span><span>T</span></div>
+        <div class="word">GUARD DT</div>
+        <div class="sub">Simulation Engine</div>
     </div>
+
 
     <div class="timebox">
         <div class="day">FRIDAY</div>
@@ -3773,18 +3775,18 @@ resize(); initWeather(); renderFrame(0); play(); requestAnimationFrame(animate);
 def hero(region: str, scenario: str, mc_runs: int, refresh_id: int) -> None:
     st.markdown(
         f"""
-        <div class="q1-hero">
-            <div class="q1-title">⚡ SAT-Guard Q1 Grid Digital Twin</div>
-            <div class="q1-subtitle">
+        <div class="hero">
+            <div class="title">⚡ SAT-Guard Q1 Grid Digital Twin</div>
+            <div class="subtitle">
                 Broadcast-style weather simulation, multi-layer grid-risk modelling, social vulnerability,
                 outage intelligence, Monte Carlo uncertainty and investment prioritisation for {html.escape(region)}.
             </div>
             <div style="margin-top:10px;">
-                <span class="q1-chip">{html.escape(region)}</span>
-                <span class="q1-chip">{html.escape(scenario)}</span>
-                <span class="q1-chip">MC runs: {mc_runs}</span>
-                <span class="q1-chip">Refresh ID: {refresh_id}</span>
-                <span class="q1-chip">UTC {datetime.now(UTC).strftime("%Y-%m-%d %H:%M")}</span>
+                <span class="chip">{html.escape(region)}</span>
+                <span class="chip">{html.escape(scenario)}</span>
+                <span class="chip">MC runs: {mc_runs}</span>
+                <span class="chip">Refresh ID: {refresh_id}</span>
+                <span class="chip">UTC {datetime.now(UTC).strftime("%Y-%m-%d %H:%M")}</span>
             </div>
         </div>
         """,
@@ -3862,7 +3864,7 @@ def overview_tab(places: pd.DataFrame, pc: pd.DataFrame, scenario: str) -> None:
 
     st.markdown(
         f"""
-        <div class="q1-note">
+        <div class="note">
             <b>Scenario logic:</b> {html.escape(SCENARIOS[scenario]["description"])}
             The deterministic model is combined with Monte Carlo perturbations over wind, rain, temperature,
             AQI, solar radiation, cloud cover and energy-not-supplied uncertainty.
@@ -4029,7 +4031,7 @@ def method_tab(places: pd.DataFrame) -> None:
     st.subheader("Model transparency")
     st.markdown(
         """
-        <div class="q1-card">
+        <div class="card">
         <h3 style="color:white;margin-top:0;">Core modelling structure</h3>
         <p style="color:#cbd5e1;">
         The dashboard combines hazard intensity, pollution, renewable generation stress,
@@ -4045,7 +4047,7 @@ def method_tab(places: pd.DataFrame) -> None:
     with c1:
         st.markdown(
             """
-            <div class="q1-formula">
+            <div class="formula">
             Risk = weather + pollution + net-load stress + outage intensity + ENS pressure<br><br>
             Failure probability = logistic(0.065 × (risk - 60))
             </div>
@@ -4055,7 +4057,7 @@ def method_tab(places: pd.DataFrame) -> None:
     with c2:
         st.markdown(
             """
-            <div class="q1-formula">
+            <div class="formula">
             Resilience = 100 − risk penalty − social vulnerability penalty − grid failure penalty
             − renewable failure penalty − cascade stress − finance penalty
             </div>
@@ -4083,20 +4085,20 @@ def export_tab(places: pd.DataFrame, outages: pd.DataFrame, grid: pd.DataFrame, 
     c1.download_button(
         "Download places CSV",
         places.to_csv(index=False).encode("utf-8"),
-        file_name="sat_guard_q1_places.csv",
+        file_name="sat_guard_places.csv",
         mime="text/csv",
     )
     c2.download_button(
         "Download recommendations CSV",
         rec.to_csv(index=False).encode("utf-8") if not rec.empty else b"",
-        file_name="sat_guard_q1_recommendations.csv",
+        file_name="sat_guard_recommendations.csv",
         mime="text/csv",
         disabled=rec.empty,
     )
     c3.download_button(
         "Download grid CSV",
         grid.to_csv(index=False).encode("utf-8"),
-        file_name="sat_guard_q1_grid.csv",
+        file_name="sat_guard_grid.csv",
         mime="text/csv",
     )
 
@@ -4112,13 +4114,13 @@ def main() -> None:
         st.session_state.refresh_id = 0
 
     with st.sidebar:
-        st.markdown("## ⚡ SAT-Guard Q1")
+        st.markdown("## ⚡ SAT-Guard")
         st.caption("Digital twin control panel")
 
         region = st.selectbox("Region", list(REGIONS.keys()), index=0)
         scenario = st.selectbox("Scenario", list(SCENARIOS.keys()), index=0)
-        mc_runs = st.slider("Monte Carlo runs", min_value=10, max_value=160, value=40, step=10)
-        q1_mc_runs = st.slider("Improved Q1 MC simulations", min_value=100, max_value=5000, value=1000, step=100)
+        mc_runs = st.slider("MC runs", min_value=10, max_value=160, value=40, step=10)
+        q1_mc_runs = st.slider("MC simulations", min_value=100, max_value=5000, value=1000, step=100)
 
         st.markdown("---")
         st.markdown("### What-if controls")
@@ -4148,7 +4150,7 @@ def main() -> None:
 
     hero(region, scenario, mc_runs, st.session_state.refresh_id)
 
-    with st.spinner("Running Q1 digital twin model..."):
+    with st.spinner("Running digital twin model..."):
         places, outages, grid = get_data_cached(region, scenario, mc_runs)
         pc = build_postcode_resilience(places, outages)
         rec = build_investment_recommendations(places, outages)
@@ -4175,7 +4177,7 @@ def main() -> None:
         "Scenario losses",
         "Finance",
         "Monte Carlo",
-        "Improved Q1 Monte Carlo",
+        "Improved Monte Carlo",
         "Validation / black-box",
         "Method",
         "Data / Export",
