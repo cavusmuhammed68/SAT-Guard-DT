@@ -1070,6 +1070,10 @@ AIR_CURRENT_VARS = ",".join([
 ])
 
 SCENARIOS = {
+
+    # =========================
+    # DEFAULT (ALWAYS SAFE)
+    # =========================
     "Live / Real-time": {
         "wind": 1.00,
         "rain": 1.00,
@@ -1079,8 +1083,12 @@ SCENARIOS = {
         "outage": 1.00,
         "finance": 1.00,
         "hazard_mode": "wind",
-        "description": "Current data without deliberate stress multipliers.",
+        "description": "Observed real-time conditions without imposed stress.",
     },
+
+    # =========================
+    # WIND STORM
+    # =========================
     "Extreme wind": {
         "wind": 1.95,
         "rain": 1.10,
@@ -1090,51 +1098,82 @@ SCENARIOS = {
         "outage": 1.35,
         "finance": 1.25,
         "hazard_mode": "wind",
-        "description": "Strong wind stress affecting overhead lines and local network assets.",
+        "description": "Severe wind event stressing overhead lines and exposed assets.",
     },
-    "Flood cascade": {
+
+    # =========================
+    # FLOOD (FIXED NAME)
+    # =========================
+    "Flood": {
         "wind": 1.25,
-        "rain": 3.25,
-        "temperature": 0.0,
+        "rain": 3.40,
+        "temperature": 0.5,
         "aqi": 1.12,
-        "solar": 0.42,
-        "outage": 1.90,
-        "finance": 1.55,
+        "solar": 0.40,
+        "outage": 2.00,
+        "finance": 1.60,
         "hazard_mode": "rain",
-        "description": "Heavy precipitation, flood-depth proxy and infrastructure disruption.",
+        "description": "Extreme rainfall and surface flooding impacting substations and underground infrastructure.",
     },
-    "Renewable collapse": {
-        "wind": 0.32,
-        "rain": 0.40,
-        "temperature": 2.0,
+
+    # =========================
+    # HEATWAVE (NEW)
+    # =========================
+    "Heatwave": {
+        "wind": 0.85,
+        "rain": 0.20,
+        "temperature": 7.5,
+        "aqi": 1.35,
+        "solar": 1.20,
+        "outage": 1.25,
+        "finance": 1.45,
+        "hazard_mode": "heat",
+        "description": "High temperature stress increasing demand peaks, transformer heating and failure risk.",
+    },
+
+    # =========================
+    # DROUGHT / LOW RENEWABLE
+    # =========================
+    "Drought": {
+        "wind": 0.30,
+        "rain": 0.15,
+        "temperature": 3.0,
         "aqi": 1.20,
-        "solar": 0.10,
-        "outage": 1.12,
-        "finance": 1.35,
+        "solar": 0.25,
+        "outage": 1.15,
+        "finance": 1.40,
         "hazard_mode": "calm",
-        "description": "Low wind and low solar generation causing net-load stress.",
+        "description": "Prolonged low wind and solar generation reducing renewable supply and increasing system stress.",
     },
+
+    # =========================
+    # BLACKOUT STRESS
+    # =========================
     "Total blackout stress": {
-        "wind": 1.15,
-        "rain": 1.25,
+        "wind": 1.10,
+        "rain": 1.20,
         "temperature": 0.0,
-        "aqi": 1.15,
+        "aqi": 1.10,
         "solar": 0.55,
         "outage": 4.00,
         "finance": 2.50,
         "hazard_mode": "blackout",
-        "description": "Forced high outage concentration and severe grid-failure stress.",
+        "description": "Extreme outage clustering and cascading failures across the network.",
     },
+
+    # =========================
+    # COMPOUND HAZARD
+    # =========================
     "Compound extreme": {
         "wind": 2.00,
-        "rain": 2.75,
+        "rain": 2.80,
         "temperature": 6.0,
-        "aqi": 1.85,
-        "solar": 0.34,
-        "outage": 2.75,
-        "finance": 2.00,
+        "aqi": 1.80,
+        "solar": 0.30,
+        "outage": 2.80,
+        "finance": 2.10,
         "hazard_mode": "storm",
-        "description": "Combined weather, pollution, outage and renewable-disruption scenario.",
+        "description": "Combined wind, flood, heat and system stress representing multi-hazard disruption.",
     },
 }
 
