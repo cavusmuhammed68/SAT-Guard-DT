@@ -1799,9 +1799,12 @@ def load_iod2025_domain_model() -> Tuple[pd.DataFrame, str]:
                 # AREA DETECTION
                 # -------------------------
                 area_col = (
-                    choose_first_matching_column(cols, ["local", "authority"])
+                    choose_first_matching_column(cols, ["local authority district name"])
+                    or choose_first_matching_column(cols, ["local authority"])
+                    or choose_first_matching_column(cols, ["lad name"])
+                    or choose_first_matching_column(cols, ["district name"])
+                    or choose_first_matching_column(cols, ["authority name"])
                     or choose_first_matching_column(cols, ["lad"])
-                    or choose_first_matching_column(cols, ["district"])
                     or choose_first_matching_column(cols, ["area"])
                     or choose_first_matching_column(cols, ["name"])
                 )
@@ -1891,8 +1894,14 @@ def load_iod2025_domain_model() -> Tuple[pd.DataFrame, str]:
 
     for col in numeric_cols:
         agg[col] = "mean"
+    
+    # normalize area_key (VERY IMPORTANT)
+    full["area_key"] = full["area_key"].str.replace(r"\s+", " ", regex=True).str.strip()
 
-    grouped = full.groupby("area_key", as_index=False).agg(agg)
+    grouped = (
+        full.groupby("area_key", as_index=False)
+        .agg(agg)
+    )
 
     # =========================
     # FINAL CLEAN
@@ -1910,16 +1919,19 @@ def load_iod2025_domain_model() -> Tuple[pd.DataFrame, str]:
 
 def infer_iod_domain_vulnerability(place: str, region: str, meta: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Q1-level IoD domain vulnerability inference with:
-    - robust matching (place + tokens + postcode prefix fallback)
-    - safe numeric aggregation
-    - zero-None tolerant outputs
+    IoD2025 domain vulnerability inference.
+
+    Corrected for your IoD2025 files:
+    - matches app places to Local Authority District names
+    - handles names such as Newcastle -> Newcastle upon Tyne
+    - supports LSOA-level files aggregated to LAD by the loader
+    - prevents None outputs where valid domain data exists
     """
 
     df, source = load_iod2025_domain_model()
     fallback = safe_float(meta.get("vulnerability_proxy"), 45)
 
-    EMPTY = {
+    empty = {
         "iod_social_vulnerability": fallback,
         "iod_domain_source": source,
         "iod_domain_match": "fallback proxy",
@@ -1934,58 +1946,92 @@ def infer_iod_domain_vulnerability(place: str, region: str, meta: Dict[str, Any]
         "iod_idaopi": np.nan,
     }
 
-    if df is None or df.empty:
-        return EMPTY
+    if df is None or df.empty or "area_key" not in df.columns:
+        return empty
 
-    if "area_key" not in df.columns:
-        return EMPTY
+    df = df.copy()
+    df["area_key_clean"] = (
+        df["area_key"]
+        .astype(str)
+        .str.lower()
+        .str.replace(r"\s+", " ", regex=True)
+        .str.strip()
+    )
 
-    # -------------------------
-    # 1. STRONG TOKEN MATCH
-    # -------------------------
-    tokens = [place.lower()] + [t.lower() for t in meta.get("authority_tokens", [])]
+    lad_aliases = {
+        "Newcastle": ["newcastle upon tyne", "newcastle"],
+        "Sunderland": ["sunderland"],
+        "Durham": ["county durham", "durham"],
+        "Middlesbrough": ["middlesbrough"],
+        "Darlington": ["darlington"],
+        "Hexham": ["northumberland", "hexham"],
+        "Leeds": ["leeds"],
+        "Sheffield": ["sheffield"],
+        "York": ["york"],
+        "Hull": ["kingston upon hull", "hull"],
+        "Bradford": ["bradford"],
+        "Doncaster": ["doncaster"],
+    }
+
+    tokens = []
+    tokens.extend(lad_aliases.get(place, []))
+    tokens.append(place.lower())
+    tokens.extend([str(t).lower() for t in meta.get("authority_tokens", [])])
+
+    # remove duplicates while preserving order
+    tokens = list(dict.fromkeys([t.strip() for t in tokens if t and str(t).strip()]))
 
     hit = pd.DataFrame()
-    matched_token = None
+    matched_token = ""
 
     for token in tokens:
-        tmp = df[df["area_key"].str.contains(token, regex=False, na=False)]
-        if not tmp.empty:
-            hit = tmp
-            matched_token = token
+        exact = df[df["area_key_clean"] == token]
+        if not exact.empty:
+            hit = exact
+            matched_token = f"exact LAD: {token}"
             break
 
-    # -------------------------
-    # 2. POSTCODE PREFIX FALLBACK (CRITICAL FIX)
-    # -------------------------
+        partial = df[df["area_key_clean"].str.contains(token, regex=False, na=False)]
+        if not partial.empty:
+            hit = partial
+            matched_token = f"partial LAD: {token}"
+            break
+
     if hit.empty:
-        prefix_map = {
-            "NE": "newcastle",
-            "SR": "sunderland",
-            "DH": "durham",
-            "TS": "middlesbrough",
-            "DL": "darlington",
+        postcode_prefix = str(meta.get("postcode_prefix", "")).upper()
+
+        postcode_to_lad = {
+            "NE": ["newcastle upon tyne", "northumberland"],
+            "SR": ["sunderland"],
+            "DH": ["county durham"],
+            "TS": ["middlesbrough", "redcar and cleveland", "stockton-on-tees"],
+            "DL": ["darlington"],
+            "LS": ["leeds"],
+            "S": ["sheffield"],
+            "YO": ["york"],
+            "HU": ["kingston upon hull", "east riding of yorkshire"],
+            "BD": ["bradford"],
+            "DN": ["doncaster"],
         }
 
-        postcode = str(meta.get("postcode_prefix", "")).upper()
+        for prefix, names in postcode_to_lad.items():
+            if postcode_prefix.startswith(prefix):
+                postcode_hits = []
+                for name in names:
+                    tmp = df[df["area_key_clean"].str.contains(name, regex=False, na=False)]
+                    if not tmp.empty:
+                        postcode_hits.append(tmp)
 
-        for p, name in prefix_map.items():
-            if postcode.startswith(p):
-                tmp = df[df["area_key"].str.contains(name, regex=False, na=False)]
-                if not tmp.empty:
-                    hit = tmp
-                    matched_token = f"postcode:{p}->{name}"
+                if postcode_hits:
+                    hit = pd.concat(postcode_hits, ignore_index=True)
+                    matched_token = f"postcode fallback: {postcode_prefix}->{', '.join(names)}"
                     break
 
-    # -------------------------
-    # 3. REGIONAL AGGREGATION
-    # -------------------------
     if hit.empty:
-        region_tokens = [t.lower() for t in REGIONS[region]["tokens"]]
-
         regional_hits = []
-        for token in region_tokens:
-            tmp = df[df["area_key"].str.contains(token, regex=False, na=False)]
+        for token in REGIONS.get(region, {}).get("tokens", []):
+            token = str(token).lower().strip()
+            tmp = df[df["area_key_clean"].str.contains(token, regex=False, na=False)]
             if not tmp.empty:
                 regional_hits.append(tmp)
 
@@ -1993,42 +2039,37 @@ def infer_iod_domain_vulnerability(place: str, region: str, meta: Dict[str, Any]
             hit = pd.concat(regional_hits, ignore_index=True)
             matched_token = "regional aggregate"
 
-    # -------------------------
-    # 4. FINAL FALLBACK
-    # -------------------------
     if hit.empty:
         return {
-            **EMPTY,
-            "iod_domain_match": "no authority/domain match; fallback proxy",
+            **empty,
+            "iod_domain_match": "no LAD/domain match; fallback proxy",
         }
 
-    # -------------------------
-    # 5. SAFE MEAN FUNCTION
-    # -------------------------
-    def safe_mean(col):
-        if col not in hit.columns:
-            return np.nan
-        vals = pd.to_numeric(hit[col], errors="coerce").dropna()
-        if vals.empty:
-            return np.nan
-        return round(float(vals.mean()), 2)
+    def safe_mean(*possible_cols):
+        for col in possible_cols:
+            if col in hit.columns:
+                vals = pd.to_numeric(hit[col], errors="coerce").dropna()
+                if not vals.empty:
+                    return round(float(vals.mean()), 2)
+        return np.nan
 
-    # -------------------------
-    # 6. OUTPUT
-    # -------------------------
+    social = safe_mean("iod_social_vulnerability_0_100", "imd_score_0_100")
+    if pd.isna(social):
+        social = fallback
+
     return {
-        "iod_social_vulnerability": safe_mean("iod_social_vulnerability_0_100") or fallback,
+        "iod_social_vulnerability": round(float(social), 2),
         "iod_domain_source": source,
         "iod_domain_match": f"matched: {matched_token}",
-        "iod_income": safe_mean("income"),
-        "iod_employment": safe_mean("employment"),
-        "iod_health": safe_mean("health"),
-        "iod_education": safe_mean("education"),
-        "iod_crime": safe_mean("crime"),
-        "iod_housing": safe_mean("housing"),
-        "iod_living": safe_mean("living"),
-        "iod_idaci": safe_mean("idaci"),
-        "iod_idaopi": safe_mean("idaopi"),
+        "iod_income": safe_mean("income", "iod_income"),
+        "iod_employment": safe_mean("employment", "iod_employment"),
+        "iod_health": safe_mean("health", "iod_health"),
+        "iod_education": safe_mean("education", "iod_education"),
+        "iod_crime": safe_mean("crime", "iod_crime"),
+        "iod_housing": safe_mean("housing", "iod_housing"),
+        "iod_living": safe_mean("living", "iod_living"),
+        "iod_idaci": safe_mean("idaci", "iod_idaci"),
+        "iod_idaopi": safe_mean("idaopi", "iod_idaopi"),
     }
 
 # =============================================================================
