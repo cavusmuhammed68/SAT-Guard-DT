@@ -3395,78 +3395,90 @@ def make_storm_frames(grid: pd.DataFrame, hours: int = 24) -> pd.DataFrame:
 
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
-def render_pydeck_map(region: str, places: pd.DataFrame, outages: pd.DataFrame,
-                     pc: pd.DataFrame, grid: pd.DataFrame, map_mode: str) -> None:
+def render_pydeck_map(region, places, outages, pc, grid, map_mode):
 
-    try:
-        import pydeck as pdk
-    except Exception:
-        st.map(places.rename(columns={"lat": "latitude", "lon": "longitude"}))
-        return
-
+    import pydeck as pdk
     import json
 
     center = REGIONS[region]["center"]
 
+    def safe_geojson(x):
+        return json.dumps(x) if isinstance(x, dict) else None
+
     # =========================
-    # SAFE LOAD (GeoJSON dict)
+    # CLEAN DATA
+    # =========================
+    df = places.copy()
+
+    df["final_risk_score"] = pd.to_numeric(df.get("final_risk_score"), errors="coerce").fillna(0)
+    df["resilience_index"] = pd.to_numeric(df.get("resilience_index"), errors="coerce").fillna(0)
+    df["estimated_load_mw"] = pd.to_numeric(df.get("estimated_load_mw"), errors="coerce").fillna(0)
+
+    # 🔥 TOOLTIP FIX (CRITICAL)
+    df["tooltip_place"] = df.get("place", "Unknown")
+    df["tooltip_postcode"] = df.get("postcode_prefix", "")
+
+    # =========================
+    # COLOR
+    # =========================
+    def risk_color(v):
+        if v >= 75: return [255, 80, 80, 220]
+        if v >= 55: return [255, 150, 60, 210]
+        if v >= 35: return [255, 210, 80, 200]
+        return [80, 220, 120, 190]
+
+    df["color"] = df["final_risk_score"].apply(risk_color)
+    df["radius"] = 3000 + df["final_risk_score"] * 100
+
+    # =========================
+    # GRID (SMOOTHED)
+    # =========================
+    grid_map = grid.copy()
+    grid_map["risk_score"] = pd.to_numeric(grid_map.get("risk_score"), errors="coerce").fillna(0)
+
+    grid_map["elevation"] = 800 + grid_map["risk_score"] * 100
+    grid_map["color"] = grid_map["risk_score"].apply(risk_color)
+
+    # =========================
+    # OUTAGES FIX (IMPORTANT)
+    # =========================
+    if outages is not None and not outages.empty:
+        outages_map = outages.copy()
+
+        outages_map["latitude"] = pd.to_numeric(outages_map.get("latitude"), errors="coerce")
+        outages_map["longitude"] = pd.to_numeric(outages_map.get("longitude"), errors="coerce")
+
+        outages_map = outages_map.dropna(subset=["latitude", "longitude"])
+
+        outages_map["radius"] = 1500 + outages_map["affected_customers"].fillna(0) * 8
+
+    else:
+        outages_map = pd.DataFrame()
+
+    # =========================
+    # LOAD GEOJSON
     # =========================
     substations, lines, gsp = load_infrastructure_data()
     flood = load_flood_data()
 
-    def safe_geojson(data):
-        if isinstance(data, dict):
-            return json.dumps(data)
-        return None
-
-    # =========================
-    # HELPERS
-    # =========================
-    def rgba_risk(v, alpha=210):
-        v = clamp(v, 0, 100)
-        if v >= 75:
-            return [239, 68, 68, alpha]
-        if v >= 55:
-            return [249, 115, 22, alpha]
-        if v >= 35:
-            return [234, 179, 8, alpha]
-        return [34, 197, 94, alpha]
-
-    # =========================
-    # DATA PREP
-    # =========================
-    grid_map = grid.copy()
-    grid_map["risk_score"] = pd.to_numeric(grid_map.get("risk_score"), errors="coerce").fillna(0)
-    grid_map["risk_color"] = grid_map["risk_score"].apply(lambda x: rgba_risk(x, 220))
-    grid_map["risk_elevation"] = 1200 + grid_map["risk_score"] * 120
-
-    places_map = places.copy()
-    places_map["final_risk_score"] = pd.to_numeric(places_map.get("final_risk_score"), errors="coerce").fillna(0)
-    places_map["resilience_index"] = pd.to_numeric(places_map.get("resilience_index"), errors="coerce").fillna(0)
-    places_map["estimated_load_mw"] = pd.to_numeric(places_map.get("estimated_load_mw"), errors="coerce").fillna(0)
-
-    places_map["place_color"] = places_map["final_risk_score"].apply(lambda x: rgba_risk(x, 255))
-    places_map["place_radius"] = 4000 + places_map["final_risk_score"] * 120
-
     layers = []
 
     # =========================
-    # GSP REGIONS (SAFE)
+    # BASE REGIONS
     # =========================
     if gsp:
         layers.append(
             pdk.Layer(
                 "GeoJsonLayer",
                 data=safe_geojson(gsp),
-                filled=True,
-                get_fill_color=[56, 189, 248, 25],
-                get_line_color=[56, 189, 248, 120],
-                pickable=True,
+                opacity=0.2,
+                get_fill_color=[100, 200, 255, 30],
+                get_line_color=[120, 200, 255, 120],
             )
         )
 
     # =========================
-    # TRANSMISSION LINES (SAFE)
+    # TRANSMISSION (THINNER)
     # =========================
     if lines:
         layers.append(
@@ -3475,92 +3487,59 @@ def render_pydeck_map(region: str, places: pd.DataFrame, outages: pd.DataFrame,
                 data=safe_geojson(lines),
                 stroked=True,
                 filled=False,
-                get_line_color=[255, 255, 255, 180],
-                line_width_min_pixels=2,
-                pickable=True,
+                get_line_color=[200, 200, 200, 120],
+                line_width_min_pixels=1.5,
             )
         )
 
     # =========================
-    # SUBSTATIONS (SAFE)
-    # =========================
-    if substations:
-        layers.append(
-            pdk.Layer(
-                "GeoJsonLayer",
-                data=safe_geojson(substations),
-                filled=True,
-                get_fill_color=[0, 200, 255, 200],
-                get_line_color=[255, 255, 255, 200],
-                point_radius_min_pixels=4,
-                pickable=True,
-            )
-        )
-
-    # =========================
-    # FLOOD OVERLAY
+    # FLOOD (SUBTLE)
     # =========================
     if flood:
         layers.append(
             pdk.Layer(
                 "GeoJsonLayer",
                 data=safe_geojson(flood),
-                opacity=0.25,
-                filled=True,
-                get_fill_color=[0, 100, 255, 80],
-                get_line_color=[0, 150, 255, 120],
-                pickable=True,
+                opacity=0.18,
+                get_fill_color=[0, 120, 255, 70],
             )
         )
 
     # =========================
-    # GRID RISK
+    # GRID HEAT
     # =========================
-    if map_mode in ["All", "Risk"]:
-        layers.append(
-            pdk.Layer(
-                "ColumnLayer",
-                data=grid_map,
-                get_position="[lon, lat]",
-                get_elevation="risk_elevation",
-                radius=3000,
-                get_fill_color="risk_color",
-                extruded=True,
-                opacity=0.8,
-                pickable=True,
-            )
-        )
-
-    # =========================
-    # INFRA LOAD
-    # =========================
-    infra = places_map.copy()
-    infra["infra_height"] = 800 + infra["estimated_load_mw"] * 12
-
     layers.append(
         pdk.Layer(
-            "ColumnLayer",
-            data=infra,
+            "HeatmapLayer",
+            data=grid_map,
             get_position="[lon, lat]",
-            get_elevation="infra_height",
-            radius=2000,
-            get_fill_color=[255, 140, 0, 160],
-            extruded=True,
-            opacity=0.5,
+            get_weight="risk_score",
+            radius_pixels=60,
+            intensity=1.2,
+            opacity=0.35,
         )
     )
 
     # =========================
-    # OUTAGES
+    # 3D RISK
     # =========================
-    if outages is not None and not outages.empty:
-        outages_map = outages.copy()
-        outages_map["affected_customers"] = pd.to_numeric(
-            outages_map.get("affected_customers"), errors="coerce"
-        ).fillna(0)
+    layers.append(
+        pdk.Layer(
+            "ColumnLayer",
+            data=grid_map,
+            get_position="[lon, lat]",
+            get_elevation="elevation",
+            get_fill_color="color",
+            radius=2500,
+            extruded=True,
+            opacity=0.7,
+        )
+    )
 
-        outages_map["radius"] = 2000 + outages_map["affected_customers"] * 10
-
+    # =========================
+    # OUTAGES (NOW ALIGNED)
+    # =========================
+    if not outages_map.empty:
         layers.append(
             pdk.Layer(
                 "ScatterplotLayer",
@@ -3568,21 +3547,22 @@ def render_pydeck_map(region: str, places: pd.DataFrame, outages: pd.DataFrame,
                 get_position="[longitude, latitude]",
                 get_radius="radius",
                 get_fill_color=[255, 0, 0, 200],
-                pickable=True,
+                opacity=0.85,
             )
         )
 
     # =========================
-    # MAIN NODES
+    # MAIN NODES (TOP LAYER)
     # =========================
     layers.append(
         pdk.Layer(
             "ScatterplotLayer",
-            data=places_map,
+            data=df,
             get_position="[lon, lat]",
-            get_fill_color="place_color",
-            get_radius="place_radius",
+            get_radius="radius",
+            get_fill_color="color",
             pickable=True,
+            auto_highlight=True,
             stroked=True,
             get_line_color=[255, 255, 255, 200],
         )
@@ -3595,18 +3575,25 @@ def render_pydeck_map(region: str, places: pd.DataFrame, outages: pd.DataFrame,
         latitude=center["lat"],
         longitude=center["lon"],
         zoom=center["zoom"],
-        pitch=60,
-        bearing=-30,
+        pitch=55,
+        bearing=-20,
     )
 
+    # 🔥 TOOLTIP FULL FIX
     tooltip = {
         "html": """
-        <b>{place}</b><br/>
+        <b>{tooltip_place}</b><br/>
+        Postcode: {tooltip_postcode}<br/>
         Risk: {final_risk_score}<br/>
         Resilience: {resilience_index}<br/>
         Load: {estimated_load_mw} MW
         """,
-        "style": {"backgroundColor": "black", "color": "white"},
+        "style": {
+            "backgroundColor": "rgba(0,0,0,0.85)",
+            "color": "white",
+            "padding": "8px",
+            "borderRadius": "8px",
+        },
     }
 
     deck = pdk.Deck(
