@@ -3404,11 +3404,20 @@ def render_pydeck_map(region: str, places: pd.DataFrame, outages: pd.DataFrame,
         st.map(places.rename(columns={"lat": "latitude", "lon": "longitude"}))
         return
 
+    import json
+
     center = REGIONS[region]["center"]
 
-    # ✅ LOAD DATA (SAFE)
+    # =========================
+    # SAFE LOAD (GeoJSON dict)
+    # =========================
     substations, lines, gsp = load_infrastructure_data()
     flood = load_flood_data()
+
+    def safe_geojson(data):
+        if isinstance(data, dict):
+            return json.dumps(data)
+        return None
 
     # =========================
     # HELPERS
@@ -3428,9 +3437,6 @@ def render_pydeck_map(region: str, places: pd.DataFrame, outages: pd.DataFrame,
     # =========================
     grid_map = grid.copy()
     grid_map["risk_score"] = pd.to_numeric(grid_map.get("risk_score"), errors="coerce").fillna(0)
-    grid_map["financial_loss_gbp"] = pd.to_numeric(grid_map.get("financial_loss_gbp"), errors="coerce").fillna(0)
-    grid_map["energy_not_supplied_mw"] = pd.to_numeric(grid_map.get("energy_not_supplied_mw"), errors="coerce").fillna(0)
-
     grid_map["risk_color"] = grid_map["risk_score"].apply(lambda x: rgba_risk(x, 220))
     grid_map["risk_elevation"] = 1200 + grid_map["risk_score"] * 120
 
@@ -3445,13 +3451,13 @@ def render_pydeck_map(region: str, places: pd.DataFrame, outages: pd.DataFrame,
     layers = []
 
     # =========================
-    # GSP REGIONS
+    # GSP REGIONS (SAFE)
     # =========================
-    if gsp is not None:
+    if gsp:
         layers.append(
             pdk.Layer(
                 "GeoJsonLayer",
-                data=gsp.__geo_interface__,
+                data=safe_geojson(gsp),
                 filled=True,
                 get_fill_color=[56, 189, 248, 25],
                 get_line_color=[56, 189, 248, 120],
@@ -3460,52 +3466,49 @@ def render_pydeck_map(region: str, places: pd.DataFrame, outages: pd.DataFrame,
         )
 
     # =========================
-    # TRANSMISSION LINES
+    # TRANSMISSION LINES (SAFE)
     # =========================
-    if lines is not None:
-        lines["path"] = lines.geometry.apply(
-            lambda g: [[x, y] for x, y in g.coords] if g else []
-        )
-
+    if lines:
         layers.append(
             pdk.Layer(
-                "PathLayer",
-                data=lines,
-                get_path="path",
-                get_width=3,
-                get_color=[255, 255, 255, 160],
-            )
-        )
-
-    # =========================
-    # SUBSTATIONS
-    # =========================
-    if substations is not None:
-        substations["lon"] = substations.geometry.x
-        substations["lat"] = substations.geometry.y
-
-        layers.append(
-            pdk.Layer(
-                "ScatterplotLayer",
-                data=substations,
-                get_position="[lon, lat]",
-                get_radius=1000,
-                get_fill_color=[0, 200, 255, 200],
+                "GeoJsonLayer",
+                data=safe_geojson(lines),
+                stroked=True,
+                filled=False,
+                get_line_color=[255, 255, 255, 180],
+                line_width_min_pixels=2,
                 pickable=True,
             )
         )
 
     # =========================
-    # FLOOD
+    # SUBSTATIONS (SAFE)
     # =========================
-    if flood is not None:
+    if substations:
         layers.append(
             pdk.Layer(
                 "GeoJsonLayer",
-                data=flood.__geo_interface__,
+                data=safe_geojson(substations),
+                filled=True,
+                get_fill_color=[0, 200, 255, 200],
+                get_line_color=[255, 255, 255, 200],
+                point_radius_min_pixels=4,
+                pickable=True,
+            )
+        )
+
+    # =========================
+    # FLOOD OVERLAY
+    # =========================
+    if flood:
+        layers.append(
+            pdk.Layer(
+                "GeoJsonLayer",
+                data=safe_geojson(flood),
                 opacity=0.25,
                 filled=True,
                 get_fill_color=[0, 100, 255, 80],
+                get_line_color=[0, 150, 255, 120],
                 pickable=True,
             )
         )
@@ -3596,7 +3599,6 @@ def render_pydeck_map(region: str, places: pd.DataFrame, outages: pd.DataFrame,
         bearing=-30,
     )
 
-    # ✅ TOOLTIP SAFE VERSION
     tooltip = {
         "html": """
         <b>{place}</b><br/>
