@@ -4198,28 +4198,53 @@ def main() -> None:
     if "refresh_id" not in st.session_state:
         st.session_state.refresh_id = 0
 
+    # =========================
+    # SIDEBAR
+    # =========================
     with st.sidebar:
         st.markdown("## ⚡ SAT-Guard")
         st.caption("Digital twin control panel")
 
         region = st.selectbox("Region", list(REGIONS.keys()), index=0)
-        scenario = st.selectbox("Scenario", list(SCENARIOS.keys()), index=0)
-        mc_runs = st.slider("MC runs", min_value=10, max_value=160, value=40, step=10)
-        q1_mc_runs = st.slider("MC simulations", min_value=100, max_value=5000, value=1000, step=100)
+
+        # 🔥 SCENARIO REMOVED → ALWAYS LIVE
+        scenario = "Live / Real-time"
+
+        mc_runs = st.slider("MC runs", 10, 160, 40, 10)
+        q1_mc_runs = st.slider("MC simulations", 100, 5000, 1000, 100)
+
+        # =========================
+        # ✅ SIMPLIFIED WHAT-IF
+        # =========================
+        st.markdown("---")
+        st.markdown("### What-if scenario")
+
+        what_if_mode = st.selectbox(
+            "Stress level",
+            [
+                "Baseline (Observed conditions)",
+                "Moderate disruption",
+                "Severe compound stress",
+            ]
+        )
+
+        WHAT_IF_MAP = {
+            "Baseline (Observed conditions)": "Live / Real-time",
+            "Moderate disruption": "Extreme wind",
+            "Severe compound stress": "Compound extreme",
+        }
+
+        scenario_for_engine = WHAT_IF_MAP[what_if_mode]
+
+        # Map
+        map_mode = st.selectbox(
+            "Map layer",
+            ["All", "Risk", "Postcode / Investment", "Outages"],
+            index=0
+        )
 
         st.markdown("---")
-        st.markdown("### What-if controls")
-        what_if_enabled = st.checkbox("Enable What-if adjustments", value=False)
-        wind_multiplier = st.slider("Wind multiplier", 0.50, 2.50, 1.00, 0.05)
-        rain_multiplier = st.slider("Rain / flood multiplier", 0.50, 3.50, 1.00, 0.05)
-        outage_multiplier = st.slider("Outage multiplier", 0.50, 4.00, 1.00, 0.05)
-        ev_support_multiplier = st.slider("EV/V2G support multiplier", 0.50, 3.00, 1.00, 0.05)
-        social_stress_multiplier = st.slider("Social stress multiplier", 0.75, 1.75, 1.00, 0.05)
-
-        map_mode = st.selectbox("Map layer", ["All", "Risk", "Postcode / Investment", "Outages"], index=0)
-
-        st.markdown("---")
-        st.info(SCENARIOS[scenario]["description"])
+        st.info(SCENARIOS[scenario_for_engine]["description"])
 
         if st.button("Run / refresh model", type="primary"):
             st.session_state.refresh_id += 1
@@ -4231,12 +4256,21 @@ def main() -> None:
             st.rerun()
 
         st.markdown("---")
-        st.caption("Put IoD2025 Excel files in the same folder or data/ folder. Fallback vulnerability proxies are used when files are absent.")
+        st.caption(
+            "IoD2025 Excel files can be placed in data/iod2025. "
+            "Fallback vulnerability proxies are used if unavailable."
+        )
 
+    # =========================
+    # HERO → ALWAYS SHOW LIVE
+    # =========================
     hero(region, scenario, mc_runs, st.session_state.refresh_id)
 
+    # =========================
+    # 🔥 DATA CALL USES WHAT-IF
+    # =========================
     with st.spinner("Running digital twin model..."):
-        places, outages, grid = get_data_cached(region, scenario, mc_runs)
+        places, outages, grid = get_data_cached(region, scenario_for_engine, mc_runs)
         pc = build_postcode_resilience(places, outages)
         rec = build_investment_recommendations(places, outages)
 
@@ -4249,9 +4283,12 @@ def main() -> None:
     imd_source = places.iloc[0].get("imd_dataset_summary", "Unknown")
     st.caption(f"IoD / deprivation data source: {imd_source}")
 
+    # =========================
+    # TABS
+    # =========================
     tabs = st.tabs([
         "Executive overview",
-        "BBC simulation",
+        "Simulation",
         "Natural hazards",
         "IoD2025 socio-economic evidence",
         "Spatial intelligence",
@@ -4287,7 +4324,7 @@ def main() -> None:
         resilience_tab(places)
 
     with tabs[6]:
-        render_ev_v2g_tab(places, scenario)
+        render_ev_v2g_tab(places, scenario_for_engine)
 
     with tabs[7]:
         render_failure_and_funding_tab(places, pc)
@@ -4308,7 +4345,7 @@ def main() -> None:
         render_improved_monte_carlo_tab(places, q1_mc_runs)
 
     with tabs[13]:
-        render_validation_tab(places, scenario)
+        render_validation_tab(places, scenario_for_engine)
 
     with tabs[14]:
         method_tab(places)
