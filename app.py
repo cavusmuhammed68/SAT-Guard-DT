@@ -4171,32 +4171,118 @@ def spatial_tab(region: str, places: pd.DataFrame, outages: pd.DataFrame, pc: pd
 
 
 def resilience_tab(places: pd.DataFrame) -> None:
-    st.subheader("Resilience and cascade diagnostics")
-    c1, c2 = st.columns(2)
-    with c1:
-        st.plotly_chart(create_cascade_radar(places), use_container_width=True)
-    with c2:
-        fig = px.scatter(
-            places,
-            x="grid_failure_probability",
-            y="resilience_index",
-            size="energy_not_supplied_mw",
-            color="social_vulnerability",
-            hover_name="place",
-            template=plotly_template(),
-            title="Grid failure vs resilience",
-            color_continuous_scale="Plasma",
-        )
-        fig.update_layout(height=390, margin=dict(l=10, r=10, t=55, b=10))
-        st.plotly_chart(fig, use_container_width=True)
+    st.subheader("Resilience analysis")
 
+    # =========================
+    # SAFE COLUMN LIST
+    # =========================
     cols = [
-        "place", "resilience_label", "resilience_index", "imd_score", "imd_match",
-        "social_vulnerability", "grid_failure_probability", "renewable_failure_probability",
-        "cascade_power", "cascade_water", "cascade_telecom", "cascade_transport",
-        "cascade_social", "total_financial_loss_gbp",
+        "place",
+        "resilience_label",
+        "resilience_index",
+        "final_risk_score",
+        "social_vulnerability",
+        "grid_failure_probability",
+        "renewable_failure_probability",
+        "energy_not_supplied_mw",
+        "total_financial_loss_gbp",
     ]
-    st.dataframe(places[cols].sort_values("resilience_index"), use_container_width=True, hide_index=True)
+
+    # Only keep existing columns
+    safe_cols = [c for c in cols if c in places.columns]
+
+    if not safe_cols:
+        st.error("No resilience data available.")
+        return
+
+    # Safe sorting
+    sort_col = "resilience_index" if "resilience_index" in places.columns else safe_cols[0]
+
+    # =========================
+    # TABLE
+    # =========================
+    st.dataframe(
+        places[safe_cols].sort_values(sort_col),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    # =========================
+    # SUMMARY METRICS (SAFE)
+    # =========================
+    c1, c2, c3 = st.columns(3)
+
+    avg_res = (
+        float(pd.to_numeric(places["resilience_index"], errors="coerce").mean())
+        if "resilience_index" in places else 0
+    )
+
+    avg_risk = (
+        float(pd.to_numeric(places["final_risk_score"], errors="coerce").mean())
+        if "final_risk_score" in places else 0
+    )
+
+    avg_loss = (
+        float(pd.to_numeric(places["total_financial_loss_gbp"], errors="coerce").mean())
+        if "total_financial_loss_gbp" in places else 0
+    )
+
+    c1.metric("Average resilience", f"{avg_res:.1f}")
+    c2.metric("Average risk", f"{avg_risk:.1f}")
+    c3.metric("Average loss", f"{avg_loss:,.0f} £")
+
+    # =========================
+    # VISUALS (SAFE)
+    # =========================
+    a, b = st.columns(2)
+
+    with a:
+        if {"place", "resilience_index"}.issubset(places.columns):
+            fig = px.bar(
+                places.sort_values("resilience_index"),
+                x="place",
+                y="resilience_index",
+                color="resilience_label" if "resilience_label" in places.columns else None,
+                title="Resilience ranking",
+                template=plotly_template(),
+            )
+            fig.update_layout(height=400, margin=dict(l=10, r=10, t=55, b=10))
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Resilience ranking unavailable.")
+
+    with b:
+        needed = {"social_vulnerability", "resilience_index"}
+        if needed.issubset(places.columns):
+            fig = px.scatter(
+                places,
+                x="social_vulnerability",
+                y="resilience_index",
+                size="total_financial_loss_gbp" if "total_financial_loss_gbp" in places.columns else None,
+                color="final_risk_score" if "final_risk_score" in places.columns else None,
+                hover_name="place" if "place" in places.columns else None,
+                title="Resilience vs social vulnerability",
+                template=plotly_template(),
+                color_continuous_scale="Turbo",
+            )
+            fig.update_layout(height=400, margin=dict(l=10, r=10, t=55, b=10))
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Scatter unavailable (missing variables)")
+
+    # =========================
+    # INTERPRETATION
+    # =========================
+    st.markdown(
+        """
+        <div class="note">
+        <b>Interpretation:</b> Resilience combines infrastructure robustness,
+        outage propagation, social vulnerability and financial exposure.
+        Lower scores indicate higher fragility under compound hazard stress.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def investment_tab(pc: pd.DataFrame, rec: pd.DataFrame) -> None:
