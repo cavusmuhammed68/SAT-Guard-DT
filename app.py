@@ -3776,7 +3776,7 @@ def hero(region: str, scenario: str, mc_runs: int, refresh_id: int) -> None:
     st.markdown(
         f"""
         <div class="hero">
-            <div class="title">⚡ SAT-Guard Q1 Grid Digital Twin</div>
+            <div class="title">⚡ SAT-Guard Grid Digital Twin</div>
             <div class="subtitle">
                 Broadcast-style weather simulation, multi-layer grid-risk modelling, social vulnerability,
                 outage intelligence, Monte Carlo uncertainty and investment prioritisation for {html.escape(region)}.
