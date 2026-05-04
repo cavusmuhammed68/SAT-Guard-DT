@@ -3403,7 +3403,43 @@ def render_pydeck_map(region, places, outages, pc, grid, map_mode):
     center = REGIONS[region]["center"]
 
     def safe_geojson(x):
-        return json.dumps(x) if isinstance(x, dict) else None
+        return x if isinstance(x, dict) else None
+
+    # =========================
+    # 🔥 OUTAGE SNAP (CRITICAL FIX)
+    # =========================
+    def snap_outages_to_places(outages, places):
+        if outages is None or outages.empty:
+            return outages
+
+        def closest(lat, lon):
+            d = ((places["lat"] - lat)**2 + (places["lon"] - lon)**2)
+            idx = d.idxmin()
+            return places.loc[idx, "lat"], places.loc[idx, "lon"]
+
+        outages = outages.copy()
+
+        new_lat, new_lon = [], []
+
+        for _, row in outages.iterrows():
+            lat = pd.to_numeric(row.get("latitude"), errors="coerce")
+            lon = pd.to_numeric(row.get("longitude"), errors="coerce")
+
+            if pd.isna(lat) or pd.isna(lon):
+                new_lat.append(None)
+                new_lon.append(None)
+                continue
+
+            clat, clon = closest(lat, lon)
+            new_lat.append(clat)
+            new_lon.append(clon)
+
+        outages["latitude"] = new_lat
+        outages["longitude"] = new_lon
+
+        return outages
+
+    outages = snap_outages_to_places(outages, places)
 
     # =========================
     # CLEAN DATA
@@ -3414,33 +3450,32 @@ def render_pydeck_map(region, places, outages, pc, grid, map_mode):
     df["resilience_index"] = pd.to_numeric(df.get("resilience_index"), errors="coerce").fillna(0)
     df["estimated_load_mw"] = pd.to_numeric(df.get("estimated_load_mw"), errors="coerce").fillna(0)
 
-    # 🔥 TOOLTIP FIX (CRITICAL)
     df["tooltip_place"] = df.get("place", "Unknown")
-    df["tooltip_postcode"] = df.get("postcode_prefix", "")
+    df["tooltip_postcode"] = df.get("postcode_prefix", "N/A")
 
     # =========================
-    # COLOR
+    # COLOR FUNCTION
     # =========================
     def risk_color(v):
-        if v >= 75: return [255, 80, 80, 220]
-        if v >= 55: return [255, 150, 60, 210]
-        if v >= 35: return [255, 210, 80, 200]
-        return [80, 220, 120, 190]
+        if v >= 75: return [255, 70, 70, 230]
+        if v >= 55: return [255, 140, 50, 220]
+        if v >= 35: return [255, 210, 90, 210]
+        return [70, 220, 130, 200]
 
     df["color"] = df["final_risk_score"].apply(risk_color)
-    df["radius"] = 3000 + df["final_risk_score"] * 100
+    df["radius"] = 2500 + df["final_risk_score"] * 90
 
     # =========================
-    # GRID (SMOOTHED)
+    # GRID
     # =========================
     grid_map = grid.copy()
     grid_map["risk_score"] = pd.to_numeric(grid_map.get("risk_score"), errors="coerce").fillna(0)
 
-    grid_map["elevation"] = 800 + grid_map["risk_score"] * 100
+    grid_map["elevation"] = 600 + grid_map["risk_score"] * 120
     grid_map["color"] = grid_map["risk_score"].apply(risk_color)
 
     # =========================
-    # OUTAGES FIX (IMPORTANT)
+    # OUTAGES
     # =========================
     if outages is not None and not outages.empty:
         outages_map = outages.copy()
@@ -3450,13 +3485,12 @@ def render_pydeck_map(region, places, outages, pc, grid, map_mode):
 
         outages_map = outages_map.dropna(subset=["latitude", "longitude"])
 
-        outages_map["radius"] = 1500 + outages_map["affected_customers"].fillna(0) * 8
-
+        outages_map["radius"] = 1200 + outages_map["affected_customers"].fillna(0) * 6
     else:
         outages_map = pd.DataFrame()
 
     # =========================
-    # LOAD GEOJSON
+    # GEO DATA
     # =========================
     substations, lines, gsp = load_infrastructure_data()
     flood = load_flood_data()
@@ -3464,21 +3498,21 @@ def render_pydeck_map(region, places, outages, pc, grid, map_mode):
     layers = []
 
     # =========================
-    # BASE REGIONS
+    # REGION OVERLAY
     # =========================
     if gsp:
         layers.append(
             pdk.Layer(
                 "GeoJsonLayer",
                 data=safe_geojson(gsp),
-                opacity=0.2,
-                get_fill_color=[100, 200, 255, 30],
-                get_line_color=[120, 200, 255, 120],
+                opacity=0.15,
+                get_fill_color=[80, 160, 255, 30],
+                get_line_color=[120, 200, 255, 100],
             )
         )
 
     # =========================
-    # TRANSMISSION (THINNER)
+    # TRANSMISSION LINES
     # =========================
     if lines:
         layers.append(
@@ -3487,26 +3521,26 @@ def render_pydeck_map(region, places, outages, pc, grid, map_mode):
                 data=safe_geojson(lines),
                 stroked=True,
                 filled=False,
-                get_line_color=[200, 200, 200, 120],
-                line_width_min_pixels=1.5,
+                get_line_color=[200, 200, 200, 100],
+                line_width_min_pixels=1,
             )
         )
 
     # =========================
-    # FLOOD (SUBTLE)
+    # FLOOD LAYER
     # =========================
     if flood:
         layers.append(
             pdk.Layer(
                 "GeoJsonLayer",
                 data=safe_geojson(flood),
-                opacity=0.18,
-                get_fill_color=[0, 120, 255, 70],
+                opacity=0.12,
+                get_fill_color=[0, 120, 255, 80],
             )
         )
 
     # =========================
-    # GRID HEAT
+    # HEATMAP (BACKGROUND)
     # =========================
     layers.append(
         pdk.Layer(
@@ -3514,14 +3548,14 @@ def render_pydeck_map(region, places, outages, pc, grid, map_mode):
             data=grid_map,
             get_position="[lon, lat]",
             get_weight="risk_score",
-            radius_pixels=60,
-            intensity=1.2,
-            opacity=0.35,
+            radius_pixels=55,
+            intensity=1.1,
+            opacity=0.25,
         )
     )
 
     # =========================
-    # 3D RISK
+    # 3D RISK COLUMNS
     # =========================
     layers.append(
         pdk.Layer(
@@ -3530,14 +3564,14 @@ def render_pydeck_map(region, places, outages, pc, grid, map_mode):
             get_position="[lon, lat]",
             get_elevation="elevation",
             get_fill_color="color",
-            radius=2500,
+            radius=2200,
             extruded=True,
-            opacity=0.7,
+            opacity=0.65,
         )
     )
 
     # =========================
-    # OUTAGES (NOW ALIGNED)
+    # OUTAGES (NOW CORRECT)
     # =========================
     if not outages_map.empty:
         layers.append(
@@ -3546,13 +3580,13 @@ def render_pydeck_map(region, places, outages, pc, grid, map_mode):
                 data=outages_map,
                 get_position="[longitude, latitude]",
                 get_radius="radius",
-                get_fill_color=[255, 0, 0, 200],
-                opacity=0.85,
+                get_fill_color=[255, 0, 0, 220],
+                opacity=0.9,
             )
         )
 
     # =========================
-    # MAIN NODES (TOP LAYER)
+    # MAIN NODES
     # =========================
     layers.append(
         pdk.Layer(
@@ -3575,11 +3609,13 @@ def render_pydeck_map(region, places, outages, pc, grid, map_mode):
         latitude=center["lat"],
         longitude=center["lon"],
         zoom=center["zoom"],
-        pitch=55,
-        bearing=-20,
+        pitch=50,
+        bearing=-15,
     )
 
-    # 🔥 TOOLTIP FULL FIX
+    # =========================
+    # TOOLTIP (FIXED)
+    # =========================
     tooltip = {
         "html": """
         <b>{tooltip_place}</b><br/>
@@ -3604,6 +3640,21 @@ def render_pydeck_map(region, places, outages, pc, grid, map_mode):
     )
 
     st.pydeck_chart(deck, use_container_width=True)
+
+    # =========================
+    # LEGEND (VERY IMPORTANT)
+    # =========================
+    st.markdown("""
+    ### 🎯 Map interpretation
+
+    - 🟢 Green → Low risk / high resilience  
+    - 🟡 Yellow → Moderate grid stress  
+    - 🟠 Orange → High risk cluster  
+    - 🔴 Red points → Active outages  
+    - 🟨 Columns → Risk intensity (height = severity)  
+
+    Heat layer → regional systemic stress concentration
+    """)
 
 # =============================================================================
 # BBC / WXCHARTS STYLE ANIMATED COMPONENT
