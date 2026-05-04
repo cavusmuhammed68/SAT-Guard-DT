@@ -1721,21 +1721,19 @@ def infer_imd_for_place(
 
 def load_iod2025_domain_model() -> Tuple[pd.DataFrame, str]:
     """
-    Q1-level IoD2025 domain loader (robust, multi-file, multi-sheet, zero-None tolerant).
+    Q1-level IoD2025 domain loader (robust, multi-file, multi-sheet, production safe)
 
-    Improvements:
-    - Flexible column detection (score / rank / rate / index)
-    - Normalisation to 0–100
-    - Aggregation across files/sheets
-    - Domain completeness scoring
-    - Composite IoD social vulnerability index
+    Fixes:
+    - Arrow dtype crash (groupby)
+    - None column issues
+    - Safe numeric conversion
+    - Stable aggregation
     """
 
     files = find_imd_files()
     parts = []
     notes = []
 
-    # Stronger keyword mapping
     DOMAIN_MAP = {
         "income": ["income"],
         "employment": ["employment"],
@@ -1746,18 +1744,6 @@ def load_iod2025_domain_model() -> Tuple[pd.DataFrame, str]:
         "living": ["living", "environment"],
         "idaci": ["idaci", "children"],
         "idaopi": ["idaopi", "older"],
-    }
-    
-    COLUMN_MAPPING = {
-    "income": ["income"],
-    "employment": ["employment"],
-    "health": ["health"],
-    "education": ["education"],
-    "crime": ["crime"],
-    "housing": ["housing", "barriers"],
-    "living": ["living", "environment"],
-    "idaci": ["idaci"],
-    "idaopi": ["idaopi"],
     }
 
     def detect_column(cols, keywords):
@@ -1776,21 +1762,19 @@ def load_iod2025_domain_model() -> Tuple[pd.DataFrame, str]:
         max_v = vals.max()
         min_v = vals.min()
 
-        # Rank → invert
         if "rank" in str(vals.name).lower():
             if max_v > min_v:
                 vals = (1 - (vals - min_v) / max(max_v - min_v, 1)) * 100
-
-        # Already percentage
         elif max_v <= 1.5:
             vals = vals * 100
-
-        # Rescale if outside 0–100
         elif max_v > 100 or min_v < 0:
             vals = (vals - min_v) / max(max_v - min_v, 1) * 100
 
         return vals.clip(0, 100)
 
+    # =========================
+    # READ FILES
+    # =========================
     for file_path in files:
         try:
             sheets = pd.read_excel(file_path, sheet_name=None, engine="openpyxl")
@@ -1804,23 +1788,14 @@ def load_iod2025_domain_model() -> Tuple[pd.DataFrame, str]:
             try:
                 work = df.copy().dropna(axis=1, how="all")
                 cols = list(work.columns)
-                
-                cols_clean = {c: clean_col(c) for c in cols}
 
-                def find_col(keywords):
-                    for col, clean in cols_clean.items():
-                        if any(k in clean for k in keywords):
-                            return col
-                    return None
-
-                # AREA DETECTION (more aggressive)
+                # AREA DETECTION
                 area_col = (
                     choose_first_matching_column(cols, ["local", "authority"])
                     or choose_first_matching_column(cols, ["lad"])
                     or choose_first_matching_column(cols, ["district"])
                     or choose_first_matching_column(cols, ["area"])
                     or choose_first_matching_column(cols, ["name"])
-                    or choose_first_matching_column(cols, ["lsoa", "name"])
                 )
 
                 code_col = (
@@ -1833,40 +1808,26 @@ def load_iod2025_domain_model() -> Tuple[pd.DataFrame, str]:
                     continue
 
                 out = pd.DataFrame()
-                
-                out["iod_income"] = pd.to_numeric(work[find_col(COLUMN_MAPPING["income"])], errors="coerce") if find_col(COLUMN_MAPPING["income"]) else None
-                out["iod_employment"] = pd.to_numeric(work[find_col(COLUMN_MAPPING["employment"])], errors="coerce") if find_col(COLUMN_MAPPING["employment"]) else None
-                out["iod_health"] = pd.to_numeric(work[find_col(COLUMN_MAPPING["health"])], errors="coerce") if find_col(COLUMN_MAPPING["health"]) else None
-                out["iod_education"] = pd.to_numeric(work[find_col(COLUMN_MAPPING["education"])], errors="coerce") if find_col(COLUMN_MAPPING["education"]) else None
-                out["iod_crime"] = pd.to_numeric(work[find_col(COLUMN_MAPPING["crime"])], errors="coerce") if find_col(COLUMN_MAPPING["crime"]) else None
-                out["iod_housing"] = pd.to_numeric(work[find_col(COLUMN_MAPPING["housing"])], errors="coerce") if find_col(COLUMN_MAPPING["housing"]) else None
-                out["iod_living"] = pd.to_numeric(work[find_col(COLUMN_MAPPING["living"])], errors="coerce") if find_col(COLUMN_MAPPING["living"]) else None
 
-                # AREA NAME
+                # AREA
                 out["area_name"] = (
                     work[area_col].astype(str)
                     if area_col is not None
                     else work[code_col].astype(str)
                 )
                 out["area_key"] = out["area_name"].str.lower()
-
-                if code_col is not None:
-                    out["area_code"] = work[code_col].astype(str)
-                else:
-                    out["area_code"] = ""
+                out["area_code"] = work[code_col].astype(str) if code_col else ""
 
                 detected_domains = []
 
+                # =========================
                 # DOMAIN EXTRACTION
+                # =========================
                 for domain, keywords in DOMAIN_MAP.items():
-
-                    col = detect_column(cols, keywords + ["score"])
-                    if col is None:
-                        col = detect_column(cols, keywords + ["rate"])
-                    if col is None:
-                        col = detect_column(cols, keywords + ["rank"])
-                    if col is None:
-                        col = detect_column(cols, keywords)
+                    col = detect_column(cols, keywords + ["score"]) \
+                          or detect_column(cols, keywords + ["rate"]) \
+                          or detect_column(cols, keywords + ["rank"]) \
+                          or detect_column(cols, keywords)
 
                     if col is not None:
                         vals = normalise_series(work[col])
@@ -1874,18 +1835,15 @@ def load_iod2025_domain_model() -> Tuple[pd.DataFrame, str]:
                             out[domain] = vals
                             detected_domains.append(domain)
 
-                if len(detected_domains) >= 2:  # minimum quality threshold
+                if len(detected_domains) >= 2:
 
-                    # Composite vulnerability (mean of available domains)
-                    domain_cols = [d for d in DOMAIN_MAP.keys() if d in out.columns]
+                    domain_cols = [d for d in detected_domains if d in out.columns]
 
                     out["iod_social_vulnerability_0_100"] = (
                         out[domain_cols].mean(axis=1, skipna=True)
                     )
 
-                    # Completeness score
                     out["domain_completeness"] = len(domain_cols)
-
                     out["source_file"] = f"{file_path.name} | {sheet_name}"
                     out["domains_detected"] = ",".join(domain_cols)
 
@@ -1895,29 +1853,53 @@ def load_iod2025_domain_model() -> Tuple[pd.DataFrame, str]:
             except Exception:
                 continue
 
-    # FINAL MERGE
+    # =========================
+    # NO DATA
+    # =========================
     if not parts:
         return pd.DataFrame(), "No readable IoD2025 domain model found; using fallback proxies."
 
     full = pd.concat(parts, ignore_index=True)
 
-    # AGGREGATE BY AREA
-    agg_cols = [c for c in full.columns if c not in ["area_name", "area_key", "source_file", "domains_detected"]]
+    # =========================
+    # 🔥 CRITICAL FIX (ARROW BUG)
+    # =========================
+    for col in full.columns:
+        try:
+            if str(full[col].dtype).startswith("arrow") or full[col].dtype == "object":
+                full[col] = pd.to_numeric(full[col], errors="ignore")
+        except Exception:
+            pass
+
+    numeric_cols = full.select_dtypes(include=[np.number]).columns.tolist()
+
+    # =========================
+    # SAFE GROUPBY
+    # =========================
+    agg_dict = {
+        "area_name": "first",
+        "source_file": "first",
+        "domains_detected": "first",
+    }
+
+    for col in numeric_cols:
+        agg_dict[col] = "mean"
 
     grouped = (
-        full.groupby("area_key")
-        .agg(
-            area_name=("area_name", "first"),
-            **{col: (col, "mean") for col in agg_cols if col != "area_key"},
-            source_file=("source_file", "first"),
-            domains_detected=("domains_detected", "first"),
-        )
-        .reset_index()
+        full.groupby("area_key", as_index=False)
+        .agg(agg_dict)
     )
 
-    # FINAL SAFETY CLEAN
+    # =========================
+    # FINAL CLEAN
+    # =========================
     numeric_cols = grouped.select_dtypes(include=[np.number]).columns
-    grouped[numeric_cols] = grouped[numeric_cols].fillna(0).clip(0, 100)
+    grouped[numeric_cols] = (
+        grouped[numeric_cols]
+        .apply(pd.to_numeric, errors="coerce")
+        .fillna(0)
+        .clip(0, 100)
+    )
 
     source_note = "; ".join(notes[:10])
 
