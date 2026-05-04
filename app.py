@@ -1398,6 +1398,34 @@ def clamp(value: float, low: float, high: float) -> float:
     except Exception:
         return low
 
+# =========================
+# HELPERS / SCORING
+# =========================
+
+def clamp(x, a, b):
+    return max(a, min(b, x))
+
+
+def risk_label(score):
+    if score >= 75:
+        return "Severe"
+    elif score >= 55:
+        return "High"
+    elif score >= 35:
+        return "Moderate"
+    else:
+        return "Low"
+
+
+def resilience_label(score):
+    if score >= 75:
+        return "Strong"
+    elif score >= 55:
+        return "Stable"
+    elif score >= 35:
+        return "Stressed"
+    else:
+        return "Fragile"
 
 def safe_float(value: Any, default: float = 0.0) -> float:
     try:
@@ -2853,7 +2881,13 @@ def build_places(region: str, scenario_name: str, mc_runs: int) -> Tuple[pd.Data
 
         rows.append(row)
 
-    return pd.DataFrame(rows), outages
+    df = pd.DataFrame(rows)
+
+    # 🔥 LABEL FIX (CRITICAL)
+    df["risk_label"] = df["final_risk_score"].apply(risk_label)
+    df["resilience_label"] = df["resilience_index"].apply(resilience_label)
+
+    return df, outages
 
 
 def interpolate_value(lat: float, lon: float, places: pd.DataFrame, col: str) -> float:
