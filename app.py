@@ -4052,58 +4052,97 @@ def metrics_panel(places: pd.DataFrame, pc: pd.DataFrame) -> None:
 def overview_tab(places: pd.DataFrame, pc: pd.DataFrame, scenario: str) -> None:
     left, right = st.columns([1.15, 0.85])
 
+    # =========================
+    # SAFE COLUMN HANDLING
+    # =========================
+    expected_cols = [
+        "place", "risk_label", "final_risk_score",
+        "resilience_label", "resilience_index",
+        "wind_speed_10m", "precipitation", "european_aqi",
+        "imd_score", "social_vulnerability",
+        "energy_not_supplied_mw", "total_financial_loss_gbp",
+    ]
+
+    # Create safe dataframe (no crash)
+    safe_df = places.reindex(columns=expected_cols)
+
+    # Choose safe sorting column
+    sort_col = "final_risk_score" if "final_risk_score" in places.columns else expected_cols[0]
+
+    # =========================
+    # TABLE
+    # =========================
     with left:
         st.subheader("Regional intelligence table")
-        display_cols = [
-            "place", "risk_label", "final_risk_score", "resilience_label", "resilience_index",
-            "wind_speed_10m", "precipitation", "european_aqi", "imd_score",
-            "social_vulnerability", "energy_not_supplied_mw", "total_financial_loss_gbp",
-        ]
+
         st.dataframe(
-            places[display_cols].sort_values("final_risk_score", ascending=False),
+            safe_df.sort_values(sort_col, ascending=False),
             use_container_width=True,
             hide_index=True,
         )
 
+    # =========================
+    # GAUGES (SAFE)
+    # =========================
     with right:
-        avg_risk = float(places["final_risk_score"].mean())
-        avg_res = float(places["resilience_index"].mean())
+        avg_risk = float(pd.to_numeric(places.get("final_risk_score"), errors="coerce").mean()) if "final_risk_score" in places else 0
+        avg_res = float(pd.to_numeric(places.get("resilience_index"), errors="coerce").mean()) if "resilience_index" in places else 0
+
         g1, g2 = st.columns(2)
         g1.plotly_chart(create_risk_gauge(avg_risk, "Regional risk"), use_container_width=True)
         g2.plotly_chart(create_resilience_gauge(avg_res, "Resilience"), use_container_width=True)
 
+    # =========================
+    # VISUALS (SAFE FILTERING)
+    # =========================
     a, b = st.columns(2)
+
     with a:
-        fig = px.bar(
-            places.sort_values("final_risk_score", ascending=False),
-            x="place",
-            y="final_risk_score",
-            color="risk_label",
-            title="Risk ranking by location",
-            template=plotly_template(),
-        )
-        fig.update_layout(height=390, margin=dict(l=10, r=10, t=55, b=10))
-        st.plotly_chart(fig, use_container_width=True)
+        if {"place", "final_risk_score"}.issubset(places.columns):
+            fig = px.bar(
+                places.sort_values("final_risk_score", ascending=False),
+                x="place",
+                y="final_risk_score",
+                color="risk_label" if "risk_label" in places.columns else None,
+                title="Risk ranking by location",
+                template=plotly_template(),
+            )
+            fig.update_layout(height=390, margin=dict(l=10, r=10, t=55, b=10))
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Risk ranking unavailable (missing model outputs)")
 
     with b:
-        fig = px.scatter(
-            places,
-            x="social_vulnerability",
-            y="final_risk_score",
-            size="total_financial_loss_gbp",
-            color="resilience_index",
-            hover_name="place",
-            title="Social vulnerability vs grid risk",
-            template=plotly_template(),
-            color_continuous_scale="Turbo",
-        )
-        fig.update_layout(height=390, margin=dict(l=10, r=10, t=55, b=10))
-        st.plotly_chart(fig, use_container_width=True)
+        required_cols = {"social_vulnerability", "final_risk_score", "total_financial_loss_gbp"}
+        if required_cols.issubset(places.columns):
+            fig = px.scatter(
+                places,
+                x="social_vulnerability",
+                y="final_risk_score",
+                size="total_financial_loss_gbp",
+                color="resilience_index" if "resilience_index" in places.columns else None,
+                hover_name="place" if "place" in places.columns else None,
+                title="Social vulnerability vs grid risk",
+                template=plotly_template(),
+                color_continuous_scale="Turbo",
+            )
+            fig.update_layout(height=390, margin=dict(l=10, r=10, t=55, b=10))
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Scatter plot unavailable (missing variables)")
+
+    # =========================
+    # SCENARIO DESCRIPTION (SAFE)
+    # =========================
+    scenario_desc = SCENARIOS.get(scenario, {}).get(
+        "description",
+        "Scenario description not available."
+    )
 
     st.markdown(
         f"""
         <div class="note">
-            <b>Scenario logic:</b> {html.escape(SCENARIOS[scenario]["description"])}
+            <b>Scenario logic:</b> {html.escape(scenario_desc)}
             The deterministic model is combined with Monte Carlo perturbations over wind, rain, temperature,
             AQI, solar radiation, cloud cover and energy-not-supplied uncertainty.
         </div>
