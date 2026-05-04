@@ -74,7 +74,7 @@ HAZARD_TYPES = {
         "threshold_high": 8.0,
         "description": "Surface-water flooding, substation access risk, basement asset exposure and cascading delays.",
     },
-    "Renewable drought": {
+    "Drought": {
         "driver": "renewable_failure_probability",
         "unit": "probability",
         "threshold_low": 0.35,
@@ -4277,7 +4277,7 @@ def main() -> None:
                 "Flood (heavy rain)": "Flood",
                 "Heatwave": "Heatwave",
                 "Compound hazard": "Compound extreme",
-                "Drought": "Renewable drought",
+                "Drought": "Drought",
             }
 
             scenario_for_engine = WHAT_IF_MAP[hazard_choice]
