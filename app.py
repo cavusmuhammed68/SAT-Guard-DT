@@ -13,7 +13,7 @@ This file is intentionally self-contained:
 - Advanced Streamlit UI
 - Plotly analytics
 - PyDeck spatial visualisation
-- Animated weather component using embedded HTML/CSS/JS
+- Hazard-inspired animated weather component using embedded HTML/CSS/JS
 
 Run:
     pip install streamlit pandas numpy requests openpyxl pydeck plotly
@@ -3011,7 +3011,7 @@ def render_pydeck_map(region: str, places: pd.DataFrame, outages: pd.DataFrame, 
 
 
 # =============================================================================
-# WXCHARTS STYLE ANIMATED COMPONENT
+# HAZARD / WXCHARTS STYLE ANIMATED COMPONENT
 # =============================================================================
 
 def make_weather_frames(places: pd.DataFrame, grid: pd.DataFrame, scenario: str) -> Dict[str, Any]:
@@ -3173,7 +3173,7 @@ canvas {{
     color:white;
     text-shadow:0 3px 10px rgba(0,0,0,.85);
 }}
-.weather span {{
+.bbc span {{
     display:inline-grid;
     place-items:center;
     width:35px;
@@ -3264,7 +3264,7 @@ input[type=range] {{
     </div>
 
     <div class="blocks">
-        <div class="weather"><span>B</span><span>B</span><span>C</span></div>
+        <div class="bbc"><span>B</span><span>B</span><span>C</span></div>
         <div class="word">WEATHER</div>
     </div>
 
@@ -3745,7 +3745,7 @@ def overview_tab(places: pd.DataFrame, pc: pd.DataFrame, scenario: str) -> None:
 
 
 def bbc_tab(region: str, scenario: str, places: pd.DataFrame, grid: pd.DataFrame) -> None:
-    st.subheader("Animated grid hazard simulation")
+    st.subheader("Hazard animated grid hazard simulation")
     st.caption("Canvas-based animation embedded inside Streamlit: moving precipitation shields, pressure contours, frontal boundaries, wind vectors, lightning for storm mode, and city labels.")
     render_bbc_weather_component(region, places, grid, scenario, height=790)
 
@@ -4036,7 +4036,7 @@ def main() -> None:
 
     tabs = st.tabs([
         "Executive overview",
-        "Weather simulation",
+        "Hazard simulation",
         "Natural hazards",
         "IoD2025 socio-economic evidence",
         "Spatial intelligence",
