@@ -4894,7 +4894,7 @@ def main() -> None:
     # =========================
     # HERO (ALWAYS SHOW LIVE LABEL)
     # =========================
-    hero(region, scenario, mc_runs, st.session_state.refresh_id)
+    hero(region, scenario_for_engine, mc_runs, st.session_state.refresh_id)
 
     # =========================
     # DATA (USES WHAT-IF)
