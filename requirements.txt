@@ -5,3 +5,7 @@ requests
 openpyxl
 plotly
 pydeck
+geopandas
+shapely
+pyproj
+fiona
