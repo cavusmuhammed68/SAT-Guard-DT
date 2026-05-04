@@ -4158,16 +4158,139 @@ def bbc_tab(region: str, scenario: str, places: pd.DataFrame, grid: pd.DataFrame
 
 
 def spatial_tab(region: str, places: pd.DataFrame, outages: pd.DataFrame, pc: pd.DataFrame, grid: pd.DataFrame, map_mode: str) -> None:
-    st.subheader("3D operational map")
-    render_pydeck_map(region, places, outages, pc, grid, map_mode)
+    st.subheader("Spatial intelligence and grid risk mapping")
 
+    center = REGIONS[region]["center"]
+
+    # =========================
+    # SAFE DATA
+    # =========================
+    df = places.copy()
+
+    df["final_risk_score"] = pd.to_numeric(df.get("final_risk_score"), errors="coerce").fillna(0)
+    df["resilience_index"] = pd.to_numeric(df.get("resilience_index"), errors="coerce").fillna(0)
+    df["energy_not_supplied_mw"] = pd.to_numeric(df.get("energy_not_supplied_mw"), errors="coerce").fillna(0)
+
+    # =========================
+    # 🔥 MAIN MAP (PRO)
+    # =========================
+    fig = px.scatter_mapbox(
+        df,
+        lat="lat",
+        lon="lon",
+        color="final_risk_score",
+        size="energy_not_supplied_mw",
+        hover_name="place",
+        hover_data={
+            "final_risk_score": True,
+            "resilience_index": True,
+            "energy_not_supplied_mw": True,
+            "lat": False,
+            "lon": False,
+        },
+        color_continuous_scale="Turbo",
+        size_max=35,
+        zoom=center["zoom"],
+        height=520,
+    )
+
+    fig.update_layout(
+        mapbox_style="carto-darkmatter",  # 🔥 MUCH BETTER THAN DEFAULT
+        mapbox_center={"lat": center["lat"], "lon": center["lon"]},
+        margin=dict(l=10, r=10, t=40, b=10),
+        coloraxis_colorbar=dict(title="Risk score"),
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # =========================
+    # 🔥 SECONDARY VIEW (VERY IMPORTANT)
+    # =========================
     a, b = st.columns(2)
+
     with a:
-        st.markdown("#### Highest-risk grid cells")
-        st.dataframe(grid.sort_values("risk_score", ascending=False).head(40), use_container_width=True, hide_index=True)
+        fig = px.density_mapbox(
+            df,
+            lat="lat",
+            lon="lon",
+            z="final_risk_score",
+            radius=30,
+            center={"lat": center["lat"], "lon": center["lon"]},
+            zoom=center["zoom"],
+            mapbox_style="carto-darkmatter",
+            title="Spatial risk intensity (heatmap)",
+        )
+        fig.update_layout(height=420, margin=dict(l=10, r=10, t=55, b=10))
+        st.plotly_chart(fig, use_container_width=True)
+
     with b:
-        st.markdown("#### Outage layer")
-        st.dataframe(outages.head(100), use_container_width=True, hide_index=True)
+        fig = px.scatter(
+            df,
+            x="social_vulnerability" if "social_vulnerability" in df.columns else "final_risk_score",
+            y="final_risk_score",
+            size="energy_not_supplied_mw",
+            color="resilience_index",
+            hover_name="place",
+            color_continuous_scale="Turbo",
+            title="Spatial risk vs vulnerability",
+            template=plotly_template(),
+        )
+        fig.update_layout(height=420, margin=dict(l=10, r=10, t=55, b=10))
+        st.plotly_chart(fig, use_container_width=True)
+
+    # =========================
+    # 🔥 OUTAGE OVERLAY (CRITICAL)
+    # =========================
+    if outages is not None and not outages.empty:
+        st.markdown("#### Live outage overlay")
+
+        outages = outages.copy()
+        outages["latitude"] = pd.to_numeric(outages.get("latitude"), errors="coerce")
+        outages["longitude"] = pd.to_numeric(outages.get("longitude"), errors="coerce")
+
+        fig = px.scatter_mapbox(
+            outages,
+            lat="latitude",
+            lon="longitude",
+            size="affected_customers",
+            color="affected_customers",
+            color_continuous_scale="Reds",
+            size_max=25,
+            zoom=center["zoom"],
+            height=420,
+        )
+
+        fig.update_layout(
+            mapbox_style="carto-darkmatter",
+            mapbox_center={"lat": center["lat"], "lon": center["lon"]},
+            margin=dict(l=10, r=10, t=40, b=10),
+        )
+
+        st.plotly_chart(fig, use_container_width=True)
+
+    # =========================
+    # INTERPRETATION (ACADEMIC)
+    # =========================
+    st.markdown(
+        """
+        <div class="note">
+        <b>Spatial intelligence interpretation:</b><br><br>
+
+        • Marker size → energy not supplied (ENS)<br>
+        • Colour → composite risk score<br>
+        • Heatmap → regional clustering of systemic stress<br><br>
+
+        High-risk clusters typically emerge where:
+        • outage density is high  
+        • social vulnerability is elevated  
+        • renewable generation is unstable  
+        • grid topology is constrained  
+
+        This allows rapid identification of priority intervention zones.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def resilience_tab(places: pd.DataFrame) -> None:
