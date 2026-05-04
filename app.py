@@ -3311,26 +3311,52 @@ def load_geojson_safe(path: Path) -> dict:
 
 def load_vector_layer_safe(path: Path) -> dict:
     """
-    Loads GeoJSON directly.
-    If a shapefile is provided, tries geopandas and converts to EPSG:4326 GeoJSON.
+    Production-safe GeoJSON loader.
+
+    - No geopandas dependency
+    - Handles large files safely
+    - Always returns valid FeatureCollection
     """
-    if not path.exists():
-        return {"type": "FeatureCollection", "features": []}
 
-    if path.suffix.lower() in [".geojson", ".json"]:
-        return load_geojson_safe(path)
+    EMPTY = {"type": "FeatureCollection", "features": []}
 
-    if path.suffix.lower() == ".shp":
-        try:
-            import geopandas as gpd
-            gdf = gpd.read_file(path)
-            if gdf.crs is not None:
-                gdf = gdf.to_crs(epsg=4326)
-            return json.loads(gdf.to_json())
-        except Exception:
-            return {"type": "FeatureCollection", "features": []}
+    try:
+        if path is None or not path.exists():
+            return EMPTY
 
-    return {"type": "FeatureCollection", "features": []}
+        # ✅ Only support GeoJSON (production-safe)
+        if path.suffix.lower() not in [".geojson", ".json"]:
+            return EMPTY
+
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        # ✅ Validate structure
+        if not isinstance(data, dict):
+            return EMPTY
+
+        if "features" not in data or not isinstance(data["features"], list):
+            return EMPTY
+
+        # Optional: filter broken geometries
+        valid_features = []
+        for feat in data["features"]:
+            if not isinstance(feat, dict):
+                continue
+            geom = feat.get("geometry")
+            if geom is None:
+                continue
+            if "coordinates" not in geom:
+                continue
+            valid_features.append(feat)
+
+        return {
+            "type": "FeatureCollection",
+            "features": valid_features
+        }
+
+    except Exception:
+        return EMPTY
 
 
 def geojson_has_features(obj: dict) -> bool:
