@@ -671,27 +671,53 @@ def render_hazard_resilience_tab(places: pd.DataFrame, pc: pd.DataFrame) -> None
 
 
 def render_ev_v2g_tab(places: pd.DataFrame, scenario: str) -> None:
-    st.subheader("EV storm operation and V2G integration")
+    st.subheader("EV system operation and V2G integration")
+
     ev = build_ev_v2g_analysis(places, scenario)
 
+    # =========================
+    # KPI PANEL
+    # =========================
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Estimated V2G EVs", f"{ev['v2g_enabled_evs'].sum():,.0f}")
-    c2.metric("Storage", f"{ev['available_storage_mwh'].sum():.1f} MWh")
-    c3.metric("Substation-coupled capacity", f"{ev['substation_coupled_capacity_mw'].sum():.1f} MW")
-    c4.metric("Potential avoided loss", money_m(ev["potential_loss_avoided_gbp"].sum()))
 
+    c1.metric("V2G-enabled EVs", f"{ev['v2g_enabled_evs'].sum():,.0f}")
+    c2.metric("Available storage", f"{ev['available_storage_mwh'].sum():.1f} MWh")
+    c3.metric("Grid-coupled capacity", f"{ev['substation_coupled_capacity_mw'].sum():.1f} MW")
+    c4.metric("Avoided loss potential", money_m(ev["potential_loss_avoided_gbp"].sum()))
+
+    # =========================
+    # 🔥 DROUGHT-SPECIFIC INSIGHT
+    # =========================
+    if scenario == "Drought":
+        st.success("Drought mode: EVs and storage are actively stabilising the grid under low renewable generation.")
+
+        d1, d2, d3 = st.columns(3)
+        d1.metric("Avg net load stress", f"{places['net_load_stress'].mean():.1f} MW")
+        d2.metric("Avg V2G support", f"{places['v2g_support_mw'].mean():.1f} MW")
+        d3.metric("Total storage support", f"{places['total_storage_support'].mean():.1f} MW")
+
+        st.info(
+            "Under drought conditions, reduced renewable output increases net load stress. "
+            "EVs operating in V2G mode provide distributed energy support, reducing ENS and stabilising the system."
+        )
+
+    # =========================
+    # VISUALS
+    # =========================
     a, b = st.columns(2)
+
     with a:
         fig = px.bar(
             ev,
             x="place",
             y="substation_coupled_capacity_mw",
             color="ev_storm_role",
-            title="V2G capacity coupled to charging substations",
+            title="EV capacity coupled to substations",
             template=plotly_template(),
         )
         fig.update_layout(height=420, margin=dict(l=10, r=10, t=55, b=10))
         st.plotly_chart(fig, use_container_width=True)
+
     with b:
         fig = px.scatter(
             ev,
@@ -700,23 +726,54 @@ def render_ev_v2g_tab(places: pd.DataFrame, scenario: str) -> None:
             size="potential_loss_avoided_gbp",
             color="ev_storm_role",
             hover_name="place",
-            title="EV storage vs operational value during storms",
+            title="EV storage vs operational system value",
             template=plotly_template(),
         )
         fig.update_layout(height=420, margin=dict(l=10, r=10, t=55, b=10))
         st.plotly_chart(fig, use_container_width=True)
 
+    # =========================
+    # 🔥 NEW GRAPH (VERY IMPORTANT)
+    # =========================
+    if "v2g_support_mw" in places.columns:
+        fig = px.bar(
+            places,
+            x="place",
+            y="v2g_support_mw",
+            title="Distributed V2G energy support by location",
+            template=plotly_template(),
+        )
+        fig.update_layout(height=360)
+        st.plotly_chart(fig, use_container_width=True)
+
+    # =========================
+    # EXPLANATION (ACADEMIC LEVEL)
+    # =========================
     st.markdown(
         """
         <div class="note">
-        <b>EV/V2G interpretation:</b> Parked EVs are treated as distributed batteries.
-        Only a fraction is assumed V2G-enabled and practically coupled to charging substations.
-        The model estimates emergency MWh, MW export support, ENS offset and avoided-loss value.
+        <b>EV/V2G system interpretation:</b><br><br>
+
+        • Electric vehicles are modelled as distributed energy storage units.<br>
+        • A proportion of EVs are assumed to be V2G-enabled and connected to substations.<br>
+        • Under normal conditions, EV contribution is moderate.<br>
+        • Under drought (low renewable generation), EVs provide critical balancing capacity.<br><br>
+
+        <b>System-level impact:</b><br>
+        • Reduces energy not supplied (ENS)<br>
+        • Mitigates grid failure probability<br>
+        • Improves resilience index<br>
+        • Reduces financial loss exposure<br><br>
+
+        This aligns with emerging smart-grid and EV integration strategies for resilient energy systems.
         </div>
         """,
         unsafe_allow_html=True,
     )
 
+    # =========================
+    # DATA TABLE
+    # =========================
     st.dataframe(ev, use_container_width=True, hide_index=True)
 
 
@@ -2585,31 +2642,41 @@ def build_places(region: str, scenario_name: str, mc_runs: int) -> Tuple[pd.Data
             "lon": lon,
             "postcode_prefix": meta["postcode_prefix"],
             "time": weather.get("time") or datetime.now(UTC).isoformat(),
+
+            # WEATHER
             "temperature_2m": weather.get("temperature_2m", random.uniform(7, 18)),
-            "apparent_temperature": weather.get("apparent_temperature", random.uniform(7, 18)),
             "wind_speed_10m": weather.get("wind_speed_10m", random.uniform(4, 26)),
-            "wind_direction_10m": weather.get("wind_direction_10m", random.uniform(0, 360)),
-            "surface_pressure": weather.get("surface_pressure", random.uniform(990, 1030)),
             "cloud_cover": weather.get("cloud_cover", random.uniform(15, 96)),
-            "shortwave_radiation": weather.get("shortwave_radiation", random.uniform(0, 550)),
-            "direct_radiation": weather.get("direct_radiation", random.uniform(0, 350)),
-            "diffuse_radiation": weather.get("diffuse_radiation", random.uniform(0, 170)),
-            "relative_humidity_2m": weather.get("relative_humidity_2m", random.uniform(55, 95)),
             "precipitation": weather.get("precipitation", random.uniform(0, 3)),
-            "is_day": weather.get("is_day", 1),
+
+            # AIR
             "european_aqi": air.get("european_aqi", random.uniform(15, 65)),
-            "pm10": air.get("pm10", random.uniform(5, 30)),
-            "pm2_5": air.get("pm2_5", random.uniform(3, 18)),
-            "nitrogen_dioxide": air.get("nitrogen_dioxide", random.uniform(5, 45)),
-            "ozone": air.get("ozone", random.uniform(20, 90)),
-            "uv_index": air.get("uv_index", random.uniform(0, 5)),
+
+            # LOAD
             "population_density": meta["population_density"],
             "estimated_load_mw": meta["estimated_load_mw"],
             "business_density": meta["business_density"],
         }
 
+        # =========================
+        # APPLY SCENARIO
+        # =========================
         row = apply_scenario(row, scenario_name)
 
+        # =========================
+        # RENEWABLE GENERATION (NEW)
+        # =========================
+        row["solar_generation"] = row["shortwave_radiation"] * 0.002
+        row["wind_generation"] = row["wind_speed_10m"] * 0.6
+
+        # Drought collapse
+        if scenario_name == "Drought":
+            row["solar_generation"] *= 0.35
+            row["wind_generation"] *= 0.25
+
+        # =========================
+        # OUTAGES
+        # =========================
         nearby = 0
         affected_customers = 0.0
 
@@ -2622,26 +2689,50 @@ def build_places(region: str, scenario_name: str, mc_runs: int) -> Tuple[pd.Data
             nearby = max(nearby, 10)
             affected_customers = max(affected_customers, 3000)
 
+        # =========================
+        # SOCIO-ECONOMIC
+        # =========================
         imd_info = infer_imd_for_place(place, region, meta, imd_summary)
         iod_profile = infer_iod_domain_vulnerability(place, region, meta)
 
-        # Prefer richer IoD2025 multi-domain vulnerability when files are available.
-        # If the domain loader cannot match the authority, fall back to the legacy IMD/proxy model.
         if "fallback" not in str(iod_profile.get("iod_domain_match", "")).lower():
-            social_vuln = round(
-                clamp(
-                    0.70 * safe_float(iod_profile.get("iod_social_vulnerability"))
-                    + 0.30 * social_vulnerability_score(row["population_density"], imd_info["imd_score"]),
-                    0,
-                    100,
-                ),
-                2,
+            social_vuln = clamp(
+                0.70 * safe_float(iod_profile.get("iod_social_vulnerability"))
+                + 0.30 * social_vulnerability_score(row["population_density"], imd_info["imd_score"]),
+                0,
+                100,
             )
         else:
             social_vuln = social_vulnerability_score(row["population_density"], imd_info["imd_score"])
 
-        outage_intensity = clamp((nearby / 20) * row.get("scenario_outage_multiplier", 1.0), 0, 1)
+        # =========================
+        # ENERGY SYSTEM (NEW CORE)
+        # =========================
+        net_load = (
+            row["estimated_load_mw"]
+            - row["solar_generation"]
+            - row["wind_generation"]
+        )
 
+        net_load = max(net_load, 0)
+
+        # EV / V2G
+        ev_penetration = random.uniform(0.2, 0.5)
+        ev_storage = ev_penetration * 120
+
+        if scenario_name == "Drought":
+            v2g_support = ev_storage * 0.55
+        else:
+            v2g_support = ev_storage * 0.25
+
+        # Grid storage
+        grid_storage = random.uniform(40, 120)
+
+        total_storage = v2g_support + grid_storage
+
+        # =========================
+        # ENS (UPDATED)
+        # =========================
         ens_mw = compute_energy_not_supplied_mw(
             nearby,
             affected_customers,
@@ -2649,11 +2740,25 @@ def build_places(region: str, scenario_name: str, mc_runs: int) -> Tuple[pd.Data
             scenario_name,
         )
 
+        if scenario_name == "Drought":
+            ens_mw = (
+                ens_mw
+                + net_load * 0.18
+                - total_storage * 0.35
+            )
+
+        ens_mw = max(ens_mw, 0)
+
+        # =========================
+        # RISK
+        # =========================
+        outage_intensity = clamp((nearby / 20), 0, 1)
+
         base = compute_multilayer_risk(row, outage_intensity, ens_mw)
         cascade = cascade_breakdown(base["failure_probability"])
 
         final_risk = clamp(
-            base["risk_score"] * (1 + cascade["system_stress"] * SCENARIOS[scenario_name]["outage"] * 0.55),
+            base["risk_score"] * (1 + cascade["system_stress"] * 0.5),
             0,
             100,
         )
@@ -2661,6 +2766,12 @@ def build_places(region: str, scenario_name: str, mc_runs: int) -> Tuple[pd.Data
         renewable_fail = renewable_failure_probability(row)
         grid_fail = grid_failure_probability(final_risk, nearby, ens_mw)
 
+        if scenario_name == "Drought":
+            grid_fail = clamp(grid_fail + (net_load / 1000) * 0.25, 0, 1)
+
+        # =========================
+        # FINANCE
+        # =========================
         finance = compute_financial_loss(
             ens_mw=ens_mw,
             affected_customers=affected_customers,
@@ -2670,6 +2781,9 @@ def build_places(region: str, scenario_name: str, mc_runs: int) -> Tuple[pd.Data
             scenario_name=scenario_name,
         )
 
+        # =========================
+        # RESILIENCE
+        # =========================
         resilience = compute_resilience_index(
             final_risk,
             social_vuln,
@@ -2679,40 +2793,40 @@ def build_places(region: str, scenario_name: str, mc_runs: int) -> Tuple[pd.Data
             finance["total_financial_loss_gbp"],
         )
 
+        if scenario_name == "Drought":
+            resilience = clamp(
+                resilience
+                - (net_load / 1000) * 10
+                + (total_storage / 500) * 8,
+                0,
+                100,
+            )
+
+        # =========================
+        # FINAL UPDATE
+        # =========================
         row.update(base)
         row.update(cascade)
         row.update(finance)
+
         row.update({
             "nearby_outages_25km": nearby,
             "affected_customers_nearby": round(affected_customers, 1),
-            "outage_intensity": round(outage_intensity, 3),
             "energy_not_supplied_mw": ens_mw,
             "final_risk_score": round(final_risk, 2),
-            "risk_label": risk_label(final_risk),
             "imd_score": imd_info["imd_score"],
-            "imd_source": imd_info["imd_source"],
-            "imd_match": imd_info["imd_match"],
-            "imd_dataset_summary": imd_source,
             "social_vulnerability": social_vuln,
-            "iod_social_vulnerability": iod_profile.get("iod_social_vulnerability"),
-            "iod_domain_source": iod_profile.get("iod_domain_source"),
-            "iod_domain_match": iod_profile.get("iod_domain_match"),
-            "iod_income": iod_profile.get("iod_income"),
-            "iod_employment": iod_profile.get("iod_employment"),
-            "iod_health": iod_profile.get("iod_health"),
-            "iod_education": iod_profile.get("iod_education"),
-            "iod_crime": iod_profile.get("iod_crime"),
-            "iod_housing": iod_profile.get("iod_housing"),
-            "iod_living": iod_profile.get("iod_living"),
-            "iod_idaci": iod_profile.get("iod_idaci"),
-            "iod_idaopi": iod_profile.get("iod_idaopi"),
+
+            # 🔥 NEW OUTPUTS
+            "net_load_stress": round(net_load, 2),
+            "v2g_support_mw": round(v2g_support, 2),
+            "grid_storage_mw": round(grid_storage, 2),
+            "total_storage_support": round(total_storage, 2),
+
             "renewable_failure_probability": renewable_fail,
             "grid_failure_probability": grid_fail,
             "resilience_index": resilience,
-            "resilience_label": resilience_label(resilience),
         })
-
-        row["flood_depth_proxy"] = flood_depth_proxy(row, scenario_name)
 
         mc = advanced_monte_carlo(row, outage_intensity, ens_mw, mc_runs)
         row.update(mc)
