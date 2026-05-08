@@ -586,6 +586,7 @@ def render_iod2025_data_quality_tab(places: pd.DataFrame) -> None:
 
 def render_hazard_resilience_tab(places: pd.DataFrame, pc: pd.DataFrame) -> None:
     st.subheader("Natural-hazard resilience by postcode")
+    render_risk_legend("natural hazards")
     hz = build_hazard_resilience_matrix(places, pc)
 
     # Robust numeric coercion to prevent empty/blank plots when values arrive as objects/NaN.
@@ -880,7 +881,7 @@ def render_scenario_finance_tab(places: pd.DataFrame, region: str, mc_runs: int)
 
 
 def render_improved_monte_carlo_tab(places: pd.DataFrame, simulations: int) -> None:
-    st.subheader("Improved Monte Carlo: correlated storm, demand and restoration-cost uncertainty")
+    st.subheader("Monte Carlo: correlated storm, demand and restoration-cost uncertainty")
     with st.spinner("Running improved Monte Carlo model..."):
         q1mc = build_q1_monte_carlo_table(places, simulations)
 
@@ -2668,10 +2669,14 @@ def build_places(region: str, scenario_name: str, mc_runs: int) -> Tuple[pd.Data
 
     outage_points = []
     for _, o in outages.iterrows():
+        source_text = str(o.get("source_text", "")).lower()
+        outage_status = str(o.get("outage_status", "")).lower()
+        is_synthetic_fallback = "synthetic point generated" in source_text or "simulated fallback" in outage_status
         outage_points.append((
             safe_float(o.get("latitude")),
             safe_float(o.get("longitude")),
             safe_float(o.get("affected_customers")),
+            is_synthetic_fallback,
         ))
 
     rows = []
@@ -2728,7 +2733,9 @@ def build_places(region: str, scenario_name: str, mc_runs: int) -> Tuple[pd.Data
         nearby = 0
         affected_customers = 0.0
 
-        for olat, olon, customers in outage_points:
+        for olat, olon, customers, is_synthetic_fallback in outage_points:
+            if is_synthetic_fallback:
+                continue
             if haversine_km(lat, lon, olat, olon) <= 25:
                 nearby += 1
                 affected_customers += customers
@@ -2849,6 +2856,10 @@ def build_places(region: str, scenario_name: str, mc_runs: int) -> Tuple[pd.Data
                 0,
                 100,
             )
+
+        final_risk, resilience = apply_live_mode_guardrails(
+            row, final_risk, resilience, nearby, affected_customers, scenario_name
+        )
 
         # =========================
         # FINAL UPDATE
@@ -3171,6 +3182,63 @@ def risk_colour(score: float) -> List[int]:
         return [234, 179, 8, 180]
     return [34, 197, 94, 180]
 
+
+
+
+def render_risk_legend(context: str = "risk") -> None:
+    """Visible legend for every regional risk visual.
+
+    Risk colour scale:
+    - Green: Low risk / normal operation (0-34)
+    - Yellow: Moderate risk / monitor (35-54)
+    - Orange: High risk / prepare intervention (55-74)
+    - Red: Severe risk / urgent response (75-100)
+
+    Resilience colour scale:
+    - Red: Fragile (0-39)
+    - Yellow: Stressed (40-59)
+    - Blue: Functional (60-79)
+    - Green: Robust (80-100)
+    """
+    st.markdown(
+        """
+        <div class="note">
+        <b>Legend:</b>
+        <span style="display:inline-block;margin-left:10px;padding:4px 9px;border-radius:999px;background:#22c55e;color:#02110a;font-weight:800;">Green = Low / normal</span>
+        <span style="display:inline-block;margin-left:6px;padding:4px 9px;border-radius:999px;background:#eab308;color:#111827;font-weight:800;">Yellow = Moderate / monitor</span>
+        <span style="display:inline-block;margin-left:6px;padding:4px 9px;border-radius:999px;background:#f97316;color:#111827;font-weight:800;">Orange = High / prepare</span>
+        <span style="display:inline-block;margin-left:6px;padding:4px 9px;border-radius:999px;background:#ef4444;color:white;font-weight:800;">Red = Severe / urgent</span>
+        <br><span style="color:#cbd5e1;font-size:13px;">For resilience charts, low resilience is bad: 0–39 Fragile, 40–59 Stressed, 60–79 Functional, 80–100 Robust.</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def apply_live_mode_guardrails(row: Dict[str, Any], final_risk: float, resilience: float, nearby: int, affected_customers: float, scenario_name: str) -> Tuple[float, float]:
+    """Prevent calm live weather from being labelled as severe or fragile.
+
+    This is not a cosmetic override. It only applies to Live / Real-time mode when
+    there is no real outage evidence and weather values are operationally benign.
+    Synthetic outage fallback points must not create a warning by themselves.
+    """
+    if scenario_name != "Live / Real-time":
+        return final_risk, resilience
+
+    wind = safe_float(row.get("wind_speed_10m"))
+    rain = safe_float(row.get("precipitation"))
+    aqi = safe_float(row.get("european_aqi"))
+    temp = safe_float(row.get("temperature_2m"))
+    calm_weather = wind < 35 and rain < 2.5 and aqi < 75 and -2 <= temp <= 28
+    no_real_outage_pressure = nearby == 0 or affected_customers <= 0
+
+    if calm_weather and no_real_outage_pressure:
+        final_risk = min(final_risk, 34.0)
+        resilience = max(resilience, 62.0)
+    elif calm_weather and nearby <= 1 and affected_customers < 250:
+        final_risk = min(final_risk, 44.0)
+        resilience = max(resilience, 55.0)
+    return round(float(final_risk), 2), round(float(resilience), 2)
 
 def resilience_colour(score: float) -> List[int]:
     score = safe_float(score)
@@ -4388,6 +4456,7 @@ def overview_tab(places: pd.DataFrame, pc: pd.DataFrame, scenario: str) -> None:
     # =========================
     with left:
         st.subheader("Regional intelligence table")
+        render_risk_legend("overview")
 
         st.dataframe(
             safe_df.sort_values(sort_col, ascending=False),
@@ -4502,6 +4571,7 @@ def spatial_tab(region: str, places: pd.DataFrame, outages: pd.DataFrame, pc: pd
     # 🔥 3. ANALYTICS MAP (CLEAN)
     # =========================
     st.markdown("### 📊 Analytical spatial view")
+    render_risk_legend("spatial")
 
     fig = px.scatter_mapbox(
         df,
@@ -4526,7 +4596,7 @@ def spatial_tab(region: str, places: pd.DataFrame, outages: pd.DataFrame, pc: pd
         mapbox_style="carto-darkmatter",
         mapbox_center={"lat": center["lat"], "lon": center["lon"]},
         margin=dict(l=10, r=10, t=40, b=10),
-        coloraxis_colorbar=dict(title="Risk"),
+        coloraxis_colorbar=dict(title="Risk score<br>Green low → Red severe"),
     )
 
     st.plotly_chart(fig, use_container_width=True)
@@ -4922,6 +4992,259 @@ def export_tab(places: pd.DataFrame, outages: pd.DataFrame, grid: pd.DataFrame, 
     )
 
 
+
+
+def render_failure_investment_tab(places: pd.DataFrame, pc: pd.DataFrame, rec: pd.DataFrame) -> None:
+    """Combined failure, funding and investment decision tab."""
+    st.subheader("Failure probability, funding and investment prioritisation")
+    failure = build_failure_analysis(places)
+    funding = build_funding_table(pc, places)
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Max failure probability", f"{failure['enhanced_failure_probability'].max()*100:.1f}%")
+    c2.metric("Priority 1 investment areas", int((rec["investment_priority"] == "Priority 1").sum()) if rec is not None and not rec.empty else 0)
+    c3.metric("Immediate funding areas", int((funding["funding_priority_band"] == "Immediate funding").sum()) if funding is not None and not funding.empty else 0)
+    c4.metric("Programme cost", money_m(rec["indicative_investment_cost_gbp"].sum()) if rec is not None and not rec.empty else "£0.00m")
+
+    a, b = st.columns(2)
+    with a:
+        fig = px.bar(
+            failure.head(18),
+            x="enhanced_failure_probability",
+            y="place",
+            color="hazard",
+            orientation="h",
+            title="Highest hazard-specific failure probabilities",
+            template=plotly_template(),
+        )
+        fig.update_layout(height=455, margin=dict(l=10, r=10, t=55, b=10), xaxis_tickformat=".0%")
+        st.plotly_chart(fig, use_container_width=True)
+    with b:
+        if rec is not None and not rec.empty:
+            fig = px.scatter(
+                rec,
+                x="financial_loss_gbp",
+                y="recommendation_score",
+                size="indicative_investment_cost_gbp",
+                color="investment_priority",
+                hover_name="postcode",
+                title="Investment score vs financial-loss exposure",
+                template=plotly_template(),
+            )
+            fig.update_layout(height=455, margin=dict(l=10, r=10, t=55, b=10))
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Investment recommendation data is unavailable.")
+
+    st.markdown("#### Failure probability evidence")
+    st.dataframe(failure, use_container_width=True, hide_index=True)
+
+    st.markdown("#### Funding prioritisation")
+    st.dataframe(funding, use_container_width=True, hide_index=True)
+
+    if rec is not None and not rec.empty:
+        st.markdown("#### Actionable investment recommendations")
+        cols = [
+            "postcode", "nearest_place", "investment_priority", "recommendation_score",
+            "investment_category", "recommended_action", "indicative_investment_cost_gbp",
+            "financial_loss_gbp", "resilience_score", "risk_score",
+        ]
+        st.dataframe(rec[[c for c in cols if c in rec.columns]], use_container_width=True, hide_index=True)
+
+
+def render_finance_funding_tab(places: pd.DataFrame, pc: pd.DataFrame, region: str, mc_runs: int) -> None:
+    """Combined finance, scenario loss and funding tab."""
+    st.subheader("Finance, scenario losses and funding case")
+    funding = build_funding_table(pc, places)
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Live baseline loss", money_m(float(places["total_financial_loss_gbp"].sum())))
+    c2.metric("Mean regional risk", f"{float(places['final_risk_score'].mean()):.1f}/100")
+    c3.metric("Immediate funding", int((funding["funding_priority_band"] == "Immediate funding").sum()) if not funding.empty else 0)
+    c4.metric("Top funding score", f"{funding['funding_priority_score'].max():.1f}/100" if not funding.empty else "0.0/100")
+
+    st.markdown(
+        """
+        <div class="note">
+        <b>Finance and funding logic:</b> financial loss is estimated from Energy Not Supplied, interruption duration,
+        customer disruption, business exposure, restoration cost and a social/critical-service uplift. Funding priority
+        then ranks postcodes by risk, low resilience, vulnerability, loss exposure, ENS, outage frequency and recommendation score.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    a, b = st.columns([1, 1])
+    with a:
+        st.plotly_chart(create_loss_waterfall(places), use_container_width=True)
+    with b:
+        matrix = scenario_financial_matrix(places, region, mc_runs)
+        fig = px.bar(
+            matrix,
+            x="scenario",
+            y="total_financial_loss_gbp",
+            color="mean_risk",
+            title="What-if scenario financial loss (£), excluding live baseline",
+            template=plotly_template(),
+            color_continuous_scale="Turbo",
+        )
+        fig.update_layout(height=390, margin=dict(l=10, r=10, t=55, b=10))
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("#### Place-level financial loss")
+    fin_cols = [
+        "place", "energy_not_supplied_mw", "ens_mwh", "estimated_duration_hours",
+        "voll_loss_gbp", "customer_interruption_loss_gbp", "business_disruption_loss_gbp",
+        "restoration_loss_gbp", "critical_services_loss_gbp", "total_financial_loss_gbp",
+    ]
+    st.dataframe(places[[c for c in fin_cols if c in places.columns]].sort_values("total_financial_loss_gbp", ascending=False), use_container_width=True, hide_index=True)
+
+    st.markdown("#### Funding table")
+    st.dataframe(funding, use_container_width=True, hide_index=True)
+
+
+def render_readme_tab() -> None:
+    """Plain-language README tab for non-specialists and reviewers."""
+    st.subheader("README file: how the dashboard works")
+    st.markdown(
+        """
+        <div class="card">
+        <h3 style="color:white;margin-top:0;">Purpose</h3>
+        <p style="color:#cbd5e1;">
+        This Streamlit application is a transparent digital-twin prototype for electricity-grid resilience in the
+        North East and Yorkshire. It combines live or fallback weather, air quality, outage evidence, socio-economic
+        vulnerability, renewable-generation stress, Energy Not Supplied, financial loss, failure probability and
+        investment prioritisation. The app is not a black-box model: each score is built from visible formulae and
+        every tab shows the variables used to generate the result.
+        </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("""
+### 1. Main data sources
+- **Weather and air quality:** Open-Meteo forecast and air-quality APIs provide temperature, wind speed, precipitation, cloud cover, shortwave radiation, humidity, European AQI and PM2.5.
+- **Outages:** Northern Powergrid live power-cut data are used when available. If coordinates are missing, synthetic points are used for map display only and are no longer counted as real outages in live risk scoring.
+- **Socio-economic vulnerability:** The app looks for IoD/IMD Excel files in `data/iod2025`. If files are unavailable, it uses transparent fallback proxies from local population density and place-level vulnerability assumptions.
+- **Infrastructure:** Optional local GeoJSON files for substations, transmission lines, grid supply points and flood layers can be placed under `data/infrastructure` and `data/flood`.
+
+### 2. What IMD / IoD social vulnerability means
+IMD means **Index of Multiple Deprivation**. It is a relative measure of deprivation for small areas in England. The standard English deprivation framework combines seven domains: Income, Employment, Education, Health, Crime, Barriers to Housing and Services, and Living Environment. The usual IMD domain weights are Income 22.5%, Employment 22.5%, Education 13.5%, Health 13.5%, Crime 9.3%, Barriers to Housing and Services 9.3%, and Living Environment 9.3%.
+
+In this app, social vulnerability is scaled from 0 to 100. A higher number means a community may have lower capacity to absorb or recover from an outage. When IoD domain files are present, the app blends Income, Employment, Health, Education, Crime, Housing/Services, Living Environment, IDACI and IDAOPI indicators. When they are not present, the fallback formula is:
+
+`Social vulnerability = 40 × min(population_density / 4500, 1) + 60 × min(IMD_score / 100, 1)`
+
+### 3. Risk score formula
+The regional risk score is a 0–100 composite:
+
+`Risk = weather_score + pollution_score + net_load_score + outage_score + ENS_score`
+
+Where:
+- `weather_score` uses wind speed, rain, cloud cover, temperature departure from 18 °C, and humidity.
+- `pollution_score` uses European AQI and PM2.5.
+- `net_load_score` increases when demand is high and renewable generation is low.
+- `outage_score` increases with nearby real outage intensity.
+- `ENS_score` increases with Energy Not Supplied.
+
+Live-mode guardrail: if the scenario is **Live / Real-time**, weather is calm and there is no real outage pressure, the app caps risk below the warning range and prevents artificial “Fragile” labels. This directly fixes the earlier North East/Yorkshire issue.
+
+### 4. Risk colour legend
+- **Green:** 0–34, low risk / normal operation.
+- **Yellow:** 35–54, moderate risk / monitor.
+- **Orange:** 55–74, high risk / prepare intervention.
+- **Red:** 75–100, severe risk / urgent response.
+
+### 5. Energy Not Supplied
+Energy Not Supplied estimates the power demand exposed to interruption:
+
+`ENS_MW = (100 × outage_count + 0.014 × affected_customers + 0.18 × base_load_MW) × scenario_outage_multiplier`
+
+This is a practical screening proxy. A production model should calibrate it against actual feeder load, outage duration, protection zones and customer minutes lost.
+
+### 6. Renewable generation and renewable failure
+Renewable generation is approximated from shortwave radiation and wind speed:
+
+`Solar_MW = 0.18 × shortwave_radiation`
+
+`Wind_MW = min((wind_speed / 12)^3, 1.20) × 95`
+
+Renewable failure probability increases when solar radiation and wind speed are low and cloud cover is high:
+
+`Renewable failure = 0.12 + 0.48 × low_solar + 0.30 × low_wind + 0.15 × cloud_fraction`
+
+### 7. Failure probability
+The deterministic failure probability uses a logistic transformation:
+
+`Failure probability = 1 / (1 + exp(-0.065 × (risk_score - 60)))`
+
+The enhanced failure analysis tab adds hazard stress, social vulnerability, outage count and ENS to produce a hazard-specific probability.
+
+### 8. Resilience score
+Resilience is also scaled from 0 to 100. Higher is better:
+
+`Resilience = 100 − (0.42 × risk + 0.20 × social_vulnerability + 17 × grid_failure + 10 × renewable_failure + 12 × system_stress + finance_penalty)`
+
+Labels:
+- **Robust:** 80–100.
+- **Functional:** 60–79.
+- **Stressed:** 40–59.
+- **Fragile:** 0–39.
+
+### 9. Financial loss
+The finance model combines five components:
+
+`Total loss = VoLL_loss + customer_interruption + business_disruption + restoration + critical_service_uplift`
+
+`VoLL_loss = ENS_MWh × £17,000/MWh`
+
+`ENS_MWh = ENS_MW × estimated_duration_hours`
+
+Business disruption increases with business density; critical-service uplift increases with social vulnerability.
+
+### 10. Funding and investment prioritisation
+Funding priority is based on:
+
+`Funding score = 0.26 × risk + 0.20 × (100 − resilience) + 0.18 × social_vulnerability + 0.15 × loss_pressure + 0.11 × ENS_pressure + 0.06 × outage_pressure + 0.04 × recommendation_score`
+
+The combined **Failure, funding and investment** tab now shows failure evidence, funding ranking and actionable postcode investment recommendations in one place.
+
+### 11. Monte Carlo tab
+The old simple Monte Carlo tab has been removed. The remaining tab is named **Monte Carlo**, but it uses the improved method. It includes:
+- a shared storm shock, so wind, rain, outage count and ENS move together;
+- triangular demand uncertainty;
+- lognormal restoration-cost tails;
+- P95 risk, P95 failure, P95 loss and CVaR95 loss.
+
+### 12. Tabs in the final app
+1. Executive overview
+2. Simulation
+3. Natural hazards
+4. IoD2025 socio-economic evidence
+5. Spatial intelligence
+6. Resilience
+7. Failure, funding and investment
+8. Finance and funding
+9. Monte Carlo
+10. Validation / black-box
+11. Method
+12. README file
+13. Data / Export
+
+### 13. Academic references used for methodology framing
+[1] Ministry of Housing, Communities & Local Government, *English Indices of Deprivation 2019: Technical Report*, 2019.
+[2] MHCLG, *English Indices of Deprivation 2019: Statistical Release*, 2019.
+[3] Ofgem, *RIIO-ED2 Electricity Distribution Price Control 2023–2028*, 2023.
+[4] Open-Meteo, *Weather Forecast API Documentation*, current API documentation.
+[5] Open-Meteo, *Air Quality API Documentation*, current API documentation.
+[6] Gorman, W., *The quest to quantify the value of lost load: A critical review*, Energy Research & Social Science, 2022.
+[7] Ovaere, M. et al., *How detailed value of lost load data impact power system decisions*, Energy Policy, 2019.
+
+### 14. Important limitations
+This is a research-grade prototype, not an operational control-room replacement. Thresholds and weights should be calibrated with DNO feeder data, observed interruptions, asset age, vegetation exposure, flood-depth maps, customer minutes lost and validated restoration costs before field deployment.
+""")
+
 # =============================================================================
 # MAIN APP
 # =============================================================================
@@ -5038,15 +5361,12 @@ def main() -> None:
         "IoD2025 socio-economic evidence",
         "Spatial intelligence",
         "Resilience",
-        "EV / V2G storm operation",
-        "Failure & funding",
-        "Investment",
-        "Scenario losses",
-        "Finance",
+        "Failure, funding and investment",
+        "Finance and funding",
         "Monte Carlo",
-        "Improved Monte Carlo",
         "Validation / black-box",
         "Method",
+        "README file",
         "Data / Export",
     ])
 
@@ -5069,33 +5389,24 @@ def main() -> None:
         resilience_tab(places)
 
     with tabs[6]:
-        render_ev_v2g_tab(places, scenario_for_engine)
+        render_failure_investment_tab(places, pc, rec)
 
     with tabs[7]:
-        render_failure_and_funding_tab(places, pc)
+        render_finance_funding_tab(places, pc, region, mc_runs)
 
     with tabs[8]:
-        investment_tab(pc, rec)
-
-    with tabs[9]:
-        render_scenario_finance_tab(places, region, mc_runs)
-
-    with tabs[10]:
-        finance_tab(places)
-
-    with tabs[11]:
-        monte_carlo_tab(places)
-
-    with tabs[12]:
         render_improved_monte_carlo_tab(places, q1_mc_runs)
 
-    with tabs[13]:
+    with tabs[9]:
         render_validation_tab(places, scenario_for_engine)
 
-    with tabs[14]:
+    with tabs[10]:
         method_tab(places)
 
-    with tabs[15]:
+    with tabs[11]:
+        render_readme_tab()
+
+    with tabs[12]:
         export_tab(places, outages, grid, pc, rec)
 
 
@@ -5152,7 +5463,8 @@ if __name__ == "__main__":
 #     - social/critical-service uplift.
 #
 # SECTION D — EV and V2G modelling
-# EVs are represented as a distributed flexibility resource. The prototype
+# EV/V2G remains in the model equations and README, but the separate storm
+# operation UI tab has been removed to keep the interface focused. The prototype
 # estimates:
 #     - EV penetration proxy;
 #     - parked EVs during storms;
