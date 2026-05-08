@@ -89,11 +89,13 @@ HAZARD_TYPES = {
         "description": "Public-health stress, crew welfare constraints and vulnerable-population impacts.",
     },
     "Compound hazard": {
-        "driver": "final_risk_score",
+        # Never use final_risk_score here. Using final risk as an input to a hazard score
+        # creates circular amplification: risk -> compound hazard -> resilience/failure -> risk.
+        "driver": "compound_hazard_proxy",
         "unit": "score",
-        "threshold_low": 45,
-        "threshold_high": 80,
-        "description": "Simultaneous stress from weather, outage exposure, vulnerability and network fragility.",
+        "threshold_low": 25,
+        "threshold_high": 70,
+        "description": "Combined meteorological and infrastructure stress from wind, rain, air quality and outage clustering.",
     },
 }
 
@@ -128,6 +130,42 @@ def hazard_stressor_score(row: Dict[str, Any], hazard_name: str) -> float:
         return 0.0
     return round(clamp((v - low) / (high - low) * 100, 0, 100), 2)
 
+
+
+
+def compute_compound_hazard_proxy(row: Dict[str, Any]) -> float:
+    """
+    Non-circular compound hazard proxy.
+
+    This intentionally uses only direct observed or scenario-adjusted drivers.
+    It must not use final_risk_score, resilience_index or failure_probability,
+    otherwise the model recursively amplifies its own output.
+    """
+    wind = safe_float(row.get("wind_speed_10m"))
+    rain = safe_float(row.get("precipitation"))
+    aqi = safe_float(row.get("european_aqi"))
+    outage = safe_float(row.get("nearby_outages_25km"))
+
+    wind_score = clamp(wind / 70, 0, 1) * 35
+    rain_score = clamp(rain / 25, 0, 1) * 30
+    aqi_score = clamp(aqi / 120, 0, 1) * 15
+    outage_score = clamp(outage / 8, 0, 1) * 20
+
+    return round(clamp(wind_score + rain_score + aqi_score + outage_score, 0, 100), 2)
+
+
+def is_calm_live_weather(row: Dict[str, Any], outage_count: float = 0, affected_customers: float = 0) -> bool:
+    """Return True for ordinary UK operating conditions in Live / Real-time mode."""
+    return (
+        str(row.get("scenario_name", "")) == "Live / Real-time"
+        and safe_float(row.get("wind_speed_10m")) < 24
+        and safe_float(row.get("precipitation")) < 2.0
+        and safe_float(row.get("european_aqi")) < 65
+        and safe_float(row.get("temperature_2m")) > -4
+        and safe_float(row.get("temperature_2m")) < 31
+        and safe_float(outage_count) <= 3
+        and safe_float(affected_customers) <= 1200
+    )
 
 def hazard_resilience_score(
     row: Dict[str, Any],
@@ -208,14 +246,14 @@ def hazard_resilience_score(
     # =========================================================
     # UK grids are highly resilient by default.
 
-    base_resilience = 82
+    base_resilience = 88
 
     # =========================================================
     # DYNAMIC WEATHER SCALING
     # =========================================================
 
     if calm_weather:
-        weather_factor = 0.40
+        weather_factor = 0.25
     else:
         weather_factor = 1.0
 
@@ -223,19 +261,19 @@ def hazard_resilience_score(
     # PENALTIES
     # =========================================================
 
-    hazard_penalty = weather_factor * (stress_n * 24)
+    hazard_penalty = weather_factor * (stress_n * 18)
 
-    social_penalty = social_n * 8
+    social_penalty = social_n * 6
 
-    outage_penalty = outage_n * 10
+    outage_penalty = outage_n * 7
 
-    ens_penalty = ens_n * 7
+    ens_penalty = ens_n * 5
 
-    failure_penalty = grid_fail * 11
+    failure_penalty = grid_fail * 7
 
-    finance_penalty = finance_n * 6
+    finance_penalty = finance_n * 4
 
-    risk_penalty = risk_n * 9
+    risk_penalty = risk_n * 6
 
     # =========================================================
     # FINAL RESILIENCE SCORE
@@ -251,6 +289,9 @@ def hazard_resilience_score(
         - finance_penalty
         - risk_penalty
     )
+
+    if calm_weather:
+        score = max(score, 68)
 
     # operational realism constraints
     score = clamp(score, 15, 100)
@@ -645,7 +686,8 @@ def enhanced_failure_probability(
     # =========================================================
 
     if calm_weather:
-        prob *= 0.55
+        prob *= 0.35
+        prob = min(prob, 0.18)
 
     # hard operational realism constraints
     prob = clamp(prob, 0.01, 0.95)
@@ -735,8 +777,10 @@ def build_failure_analysis(places: pd.DataFrame) -> pd.DataFrame:
                 "postcode": r.get("postcode_prefix"),
                 "hazard": hazard,
                 "enhanced_failure_probability": out["enhanced_failure_probability"],
+                "failure_level": out.get("failure_level", ""),
                 "hazard_stress_score": out["hazard_stress_score"],
                 "failure_evidence": out["failure_evidence"],
+                "dominant_failure_drivers": out.get("dominant_failure_drivers", ""),
                 "final_risk_score": r.get("final_risk_score"),
                 "resilience_index": r.get("resilience_index"),
                 "financial_loss_gbp": r.get("total_financial_loss_gbp"),
@@ -1794,14 +1838,14 @@ def clamp(x, a, b):
 
 
 def risk_label(score):
-    if score >= 75:
+    score = safe_float(score)
+    if score >= 85:
         return "Severe"
-    elif score >= 55:
+    elif score >= 65:
         return "High"
-    elif score >= 35:
+    elif score >= 40:
         return "Moderate"
-    else:
-        return "Low"
+    return "Low"
 
 
 def resilience_label(score):
@@ -1851,11 +1895,11 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 def risk_label(score: float) -> str:
     score = safe_float(score)
-    if score >= 75:
+    if score >= 85:
         return "Severe"
-    if score >= 55:
+    if score >= 65:
         return "High"
-    if score >= 35:
+    if score >= 40:
         return "Moderate"
     return "Low"
 
@@ -2815,17 +2859,31 @@ def compute_energy_not_supplied_mw(
     base_load_mw: float,
     scenario_name: str,
 ) -> float:
+    """
+    Estimate energy not supplied (ENS) in MW with live-mode realism.
+
+    In the earlier version, Live / Real-time mode could create very large ENS
+    purely from nearby records and base load. That made calm weather look like a
+    severe power-system emergency. This calibrated version only creates material
+    ENS when there are meaningful outage/customer signals or an explicit stress
+    scenario.
+    """
     params = SCENARIOS.get(scenario_name, SCENARIOS["Live / Real-time"])
 
-    outage_component = safe_float(outage_count) * 100.0
-    customer_component = safe_float(affected_customers) * 0.014
+    outage_count = safe_float(outage_count)
+    affected_customers = safe_float(affected_customers)
+    base_load_mw = safe_float(base_load_mw)
 
-    # Live mode must not turn normal demand into artificial unserved energy.
-    # If there are no real nearby outages and no affected customers, ENS is zero.
-    if scenario_name == "Live / Real-time" and safe_float(outage_count) <= 0 and safe_float(affected_customers) <= 0:
+    if scenario_name == "Live / Real-time":
+        outage_component = outage_count * 12.0
+        customer_component = affected_customers * 0.0025
         base_component = 0.0
-    else:
-        base_component = safe_float(base_load_mw) * (0.03 if scenario_name == "Live / Real-time" else 0.18)
+        ens_mw = outage_component + customer_component + base_component
+        return round(clamp(ens_mw, 0, 650), 2)
+
+    outage_component = outage_count * 85.0
+    customer_component = affected_customers * 0.010
+    base_component = base_load_mw * 0.14
 
     ens_mw = (outage_component + customer_component + base_component) * params["outage"]
     return round(clamp(ens_mw, 0, 6500), 2)
@@ -2884,16 +2942,23 @@ def social_vulnerability_score(pop_density: float, imd_score: float) -> float:
 
 
 def grid_failure_probability(risk_score: float, outage_count: float, ens_mw: float) -> float:
-    return round(clamp(
-        clamp(risk_score / 100, 0, 1) * 0.50
-        + clamp(outage_count / 10, 0, 1) * 0.30
-        + clamp(ens_mw / 1200, 0, 1) * 0.20,
-        0,
-        1,
-    ), 3)
+    """Calibrated technical grid-failure probability."""
+    risk_n = clamp(safe_float(risk_score) / 100, 0, 1)
+    outage_n = clamp(safe_float(outage_count) / 10, 0, 1)
+    ens_n = clamp(safe_float(ens_mw) / 2500, 0, 1)
+
+    probability = 0.025 + 0.22 * risk_n + 0.20 * outage_n + 0.14 * ens_n
+    return round(clamp(probability, 0.01, 0.75), 3)
 
 
 def compute_multilayer_risk(row: Dict[str, Any], outage_intensity: float, ens_mw: float) -> Dict[str, float]:
+    """
+    Calibrated multi-layer risk score.
+
+    Normal weather and ordinary live operation should remain low/moderate.
+    Severe scores are reserved for genuine stress scenarios such as high wind,
+    heavy rain/flood, blackout stress or compound extremes.
+    """
     wind = safe_float(row.get("wind_speed_10m"))
     rain = safe_float(row.get("precipitation"))
     cloud = safe_float(row.get("cloud_cover"))
@@ -2902,32 +2967,37 @@ def compute_multilayer_risk(row: Dict[str, Any], outage_intensity: float, ens_mw
     temp = safe_float(row.get("temperature_2m"))
     humidity = safe_float(row.get("relative_humidity_2m"))
 
-    weather_score = (
-        clamp(wind / 45, 0, 1) * 27
-        + clamp(rain / 6, 0, 1) * 18
-        + clamp(cloud / 100, 0, 1) * 7
-        + clamp(abs(temp - 18) / 20, 0, 1) * 8
-        + clamp(humidity / 100, 0, 1) * 4
-    )
+    wind_score = clamp((wind - 18) / 52, 0, 1) * 24
+    rain_score = clamp((rain - 1.5) / 23.5, 0, 1) * 20
+    cloud_score = clamp((cloud - 75) / 25, 0, 1) * 3
+    temp_score = clamp(max(abs(temp - 18) - 10, 0) / 18, 0, 1) * 8
+    humidity_score = clamp((humidity - 88) / 12, 0, 1) * 2
+
+    weather_score = wind_score + rain_score + cloud_score + temp_score + humidity_score
 
     pollution_score = (
-        clamp(aqi / 100, 0, 1) * 17
-        + clamp(pm25 / 60, 0, 1) * 9
+        clamp((aqi - 55) / 95, 0, 1) * 10
+        + clamp((pm25 - 20) / 50, 0, 1) * 5
     )
 
     renewable_mw = renewable_generation_mw(row)
-    net_load = peak_load_multiplier() * 100 - renewable_mw
-    load_score = clamp(net_load / 220, 0, 1) * 14
+    net_load = max(peak_load_multiplier() * 100 - renewable_mw, 0)
+    load_score = clamp((net_load - 80) / 220, 0, 1) * 10
 
-    outage_score = clamp(outage_intensity, 0, 1) * 20
-    ens_score = clamp(ens_mw / 1500, 0, 1) * 17
+    outage_score = clamp(outage_intensity, 0, 1) * 16
+    ens_score = clamp(ens_mw / 2500, 0, 1) * 14
 
     score = clamp(weather_score + pollution_score + load_score + outage_score + ens_score, 0, 100)
-    failure_probability = 1 / (1 + np.exp(-0.065 * (score - 60)))
+
+    # Live calm-weather guard: prevents false emergency outputs when weather is good.
+    if is_calm_live_weather(row, row.get("nearby_outages_25km", 0), row.get("affected_customers_nearby", 0)):
+        score = min(score, 34.0)
+
+    failure_probability = 1 / (1 + np.exp(-0.075 * (score - 72)))
 
     return {
         "risk_score": round(float(score), 2),
-        "failure_probability": round(float(failure_probability), 3),
+        "failure_probability": round(float(clamp(failure_probability, 0.01, 0.80)), 3),
         "renewable_generation_mw": round(float(renewable_mw), 2),
         "net_load_mw": round(float(net_load), 2),
     }
@@ -2958,18 +3028,19 @@ def compute_resilience_index(
     system_stress: float,
     financial_loss_gbp: float,
 ) -> float:
-    finance_penalty = clamp(financial_loss_gbp / 15_000_000, 0, 1) * 10
+    """Calibrated resilience index for operational electricity-network conditions."""
+    finance_penalty = clamp(financial_loss_gbp / 25_000_000, 0, 1) * 6
 
-    resilience = 100 - (
-        0.42 * safe_float(final_risk)
-        + 0.20 * safe_float(social_vulnerability)
-        + 17 * safe_float(grid_failure)
-        + 10 * safe_float(renewable_failure)
-        + 12 * safe_float(system_stress)
+    resilience = 92 - (
+        0.28 * safe_float(final_risk)
+        + 0.11 * safe_float(social_vulnerability)
+        + 9 * safe_float(grid_failure)
+        + 5 * safe_float(renewable_failure)
+        + 7 * safe_float(system_stress)
         + finance_penalty
     )
 
-    return round(clamp(resilience, 0, 100), 2)
+    return round(clamp(resilience, 15, 100), 2)
 
 
 def flood_depth_proxy(row: Dict[str, Any], scenario_name: str) -> float:
@@ -3093,9 +3164,12 @@ def build_places(region: str, scenario_name: str, mc_runs: int) -> Tuple[pd.Data
             "wind_speed_10m": weather.get("wind_speed_10m", random.uniform(4, 26)),
             "cloud_cover": weather.get("cloud_cover", random.uniform(15, 96)),
             "precipitation": weather.get("precipitation", random.uniform(0, 3)),
+            "shortwave_radiation": weather.get("shortwave_radiation", random.uniform(80, 450)),
+            "relative_humidity_2m": weather.get("relative_humidity_2m", random.uniform(45, 88)),
 
             # AIR
             "european_aqi": air.get("european_aqi", random.uniform(15, 65)),
+            "pm2_5": air.get("pm2_5", random.uniform(3, 18)),
 
             # LOAD
             "population_density": meta["population_density"],
@@ -3201,9 +3275,23 @@ def build_places(region: str, scenario_name: str, mc_runs: int) -> Tuple[pd.Data
         # =========================
         # RISK
         # =========================
+        row["nearby_outages_25km"] = nearby
+        row["affected_customers_nearby"] = round(affected_customers, 1)
+        row["compound_hazard_proxy"] = compute_compound_hazard_proxy(row)
+
         outage_intensity = clamp((nearby / 20), 0, 1)
 
+        calm_live_weather = is_calm_live_weather(row, nearby, affected_customers)
+
+        if calm_live_weather:
+            ens_mw = min(ens_mw, 75.0)
+
         base = compute_multilayer_risk(row, outage_intensity, ens_mw)
+
+        if calm_live_weather:
+            base["risk_score"] = min(base["risk_score"], 34.0)
+            base["failure_probability"] = min(base["failure_probability"], 0.12)
+
         cascade = cascade_breakdown(base["failure_probability"])
 
         final_risk = clamp(
@@ -3218,18 +3306,10 @@ def build_places(region: str, scenario_name: str, mc_runs: int) -> Tuple[pd.Data
         if scenario_name == "Drought":
             grid_fail = clamp(grid_fail + (net_load / 1000) * 0.25, 0, 1)
 
-        good_live_weather = (
-            scenario_name == "Live / Real-time"
-            and nearby == 0
-            and affected_customers <= 0
-            and safe_float(row.get("wind_speed_10m")) < 28
-            and safe_float(row.get("precipitation")) < 1.5
-            and safe_float(row.get("european_aqi")) < 75
-        )
-        if good_live_weather:
-            final_risk = min(final_risk, 32.0)
-            grid_fail = min(grid_fail, 0.18)
-            ens_mw = 0.0
+        if calm_live_weather:
+            final_risk = min(final_risk, 36.0)
+            grid_fail = min(grid_fail, 0.12)
+            ens_mw = min(ens_mw, 75.0)
 
         # =========================
         # FINANCE
@@ -3264,8 +3344,8 @@ def build_places(region: str, scenario_name: str, mc_runs: int) -> Tuple[pd.Data
                 100,
             )
 
-        if 'good_live_weather' in locals() and good_live_weather:
-            resilience = max(resilience, 62.0)
+        if calm_live_weather:
+            resilience = max(resilience, 68.0)
 
         # =========================
         # FINAL UPDATE
@@ -3277,7 +3357,8 @@ def build_places(region: str, scenario_name: str, mc_runs: int) -> Tuple[pd.Data
         row.update({
             "nearby_outages_25km": nearby,
             "affected_customers_nearby": round(affected_customers, 1),
-            "energy_not_supplied_mw": ens_mw,
+            "energy_not_supplied_mw": round(ens_mw, 2),
+            "compound_hazard_proxy": row.get("compound_hazard_proxy", compute_compound_hazard_proxy(row)),
             "final_risk_score": round(final_risk, 2),
             "imd_score": imd_info["imd_score"],
             "social_vulnerability": social_vuln,
@@ -3299,6 +3380,21 @@ def build_places(region: str, scenario_name: str, mc_runs: int) -> Tuple[pd.Data
         rows.append(row)
 
     df = pd.DataFrame(rows)
+
+    # Final operational realism guard for live calm weather. This prevents a stale
+    # or noisy external record from pushing good-weather areas into Severe/Fragile.
+    if scenario_name == "Live / Real-time" and not df.empty:
+        calm_mask = (
+            (pd.to_numeric(df["wind_speed_10m"], errors="coerce").fillna(0) < 24)
+            & (pd.to_numeric(df["precipitation"], errors="coerce").fillna(0) < 2.0)
+            & (pd.to_numeric(df["european_aqi"], errors="coerce").fillna(0) < 65)
+            & (pd.to_numeric(df["nearby_outages_25km"], errors="coerce").fillna(0) <= 3)
+        )
+        df.loc[calm_mask, "final_risk_score"] = df.loc[calm_mask, "final_risk_score"].clip(upper=36)
+        df.loc[calm_mask, "failure_probability"] = df.loc[calm_mask, "failure_probability"].clip(upper=0.12)
+        df.loc[calm_mask, "grid_failure_probability"] = df.loc[calm_mask, "grid_failure_probability"].clip(upper=0.12)
+        df.loc[calm_mask, "energy_not_supplied_mw"] = df.loc[calm_mask, "energy_not_supplied_mw"].clip(upper=75)
+        df.loc[calm_mask, "resilience_index"] = df.loc[calm_mask, "resilience_index"].clip(lower=68)
 
     # 🔥 LABEL FIX (CRITICAL)
     df["risk_label"] = df["final_risk_score"].apply(risk_label)
