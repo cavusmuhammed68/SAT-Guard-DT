@@ -129,7 +129,6 @@ def hazard_stressor_score(row: Dict[str, Any], hazard_name: str) -> float:
     return round(clamp((v - low) / (high - low) * 100, 0, 100), 2)
 
 
-```python
 def hazard_resilience_score(
     row: Dict[str, Any],
     hazard_name: str
@@ -383,9 +382,6 @@ def hazard_resilience_score(
             "with dynamic weather calibration"
         ),
     }
-```
-
-
 
 def build_hazard_resilience_matrix(places: pd.DataFrame, pc: pd.DataFrame) -> pd.DataFrame:
     """Build postcode/place-level resilience scores across hazard types."""
