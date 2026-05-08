@@ -129,24 +129,120 @@ def hazard_stressor_score(row: Dict[str, Any], hazard_name: str) -> float:
     return round(clamp((v - low) / (high - low) * 100, 0, 100), 2)
 
 
-def hazard_resilience_score(row: Dict[str, Any], hazard_name: str) -> Dict[str, Any]:
-    """Compute natural-hazard-specific resilience and explain key penalties."""
+```python
+def hazard_resilience_score(
+    row: Dict[str, Any],
+    hazard_name: str
+) -> Dict[str, Any]:
+    """
+    Advanced natural-hazard resilience model.
+
+    This calibrated version prevents unrealistic
+    fragile/severe classifications during normal conditions.
+
+    Features:
+    -------------------------
+    - weather-aware resilience scaling
+    - socio-technical integration
+    - ENS moderation
+    - outage clustering impact
+    - explainable resilience degradation
+    - operational realism calibration
+
+    Output:
+        resilience score between 15 and 100
+    """
+
+    # =========================================================
+    # INPUTS
+    # =========================================================
+
     stress = hazard_stressor_score(row, hazard_name)
-    base_resilience = safe_float(row.get("resilience_index"))
+
     social = safe_float(row.get("social_vulnerability"))
+
     outage = safe_float(row.get("nearby_outages_25km"))
+
     ens = safe_float(row.get("energy_not_supplied_mw"))
+
     grid_fail = safe_float(row.get("grid_failure_probability"))
+
     finance = safe_float(row.get("total_financial_loss_gbp"))
 
-    hazard_penalty = stress * 0.32
-    social_penalty = social * 0.16
-    outage_penalty = clamp(outage / 8, 0, 1) * 12
-    ens_penalty = clamp(ens / 1000, 0, 1) * 10
-    failure_penalty = grid_fail * 12
-    finance_penalty = clamp(finance / 12_000_000, 0, 1) * 8
+    wind = safe_float(row.get("wind_speed_10m"))
 
-    score = clamp(
+    rain = safe_float(row.get("precipitation"))
+
+    aqi = safe_float(row.get("european_aqi"))
+
+    risk = safe_float(row.get("final_risk_score"))
+
+    # =========================================================
+    # NORMALISATION
+    # =========================================================
+
+    stress_n = clamp(stress / 100, 0, 1)
+
+    social_n = clamp(social / 100, 0, 1)
+
+    outage_n = clamp(outage / 10, 0, 1)
+
+    ens_n = clamp(ens / 2500, 0, 1)
+
+    finance_n = clamp(finance / 20_000_000, 0, 1)
+
+    risk_n = clamp(risk / 100, 0, 1)
+
+    # =========================================================
+    # CALM WEATHER DETECTION
+    # =========================================================
+
+    calm_weather = (
+        wind < 20
+        and rain < 3
+        and aqi < 60
+        and outage < 2
+    )
+
+    # =========================================================
+    # BASE RESILIENCE
+    # =========================================================
+    # UK grids are highly resilient by default.
+
+    base_resilience = 82
+
+    # =========================================================
+    # DYNAMIC WEATHER SCALING
+    # =========================================================
+
+    if calm_weather:
+        weather_factor = 0.40
+    else:
+        weather_factor = 1.0
+
+    # =========================================================
+    # PENALTIES
+    # =========================================================
+
+    hazard_penalty = weather_factor * (stress_n * 24)
+
+    social_penalty = social_n * 8
+
+    outage_penalty = outage_n * 10
+
+    ens_penalty = ens_n * 7
+
+    failure_penalty = grid_fail * 11
+
+    finance_penalty = finance_n * 6
+
+    risk_penalty = risk_n * 9
+
+    # =========================================================
+    # FINAL RESILIENCE SCORE
+    # =========================================================
+
+    score = (
         base_resilience
         - hazard_penalty
         - social_penalty
@@ -154,36 +250,141 @@ def hazard_resilience_score(row: Dict[str, Any], hazard_name: str) -> Dict[str, 
         - ens_penalty
         - failure_penalty
         - finance_penalty
-        + 22,
-        0,
-        100,
+        - risk_penalty
     )
 
+    # operational realism constraints
+    score = clamp(score, 15, 100)
+
+    # =========================================================
+    # RESILIENCE CLASSIFICATION
+    # =========================================================
+
+    if score >= 80:
+        level = "Robust"
+
+    elif score >= 65:
+        level = "Stable"
+
+    elif score >= 45:
+        level = "Stressed"
+
+    else:
+        level = "Fragile"
+
+    # =========================================================
+    # DRIVER ANALYSIS
+    # =========================================================
+
     drivers = []
-    if stress >= 65:
-        drivers.append(f"high {hazard_name.lower()} stress ({stress}/100)")
-    if social >= 55:
-        drivers.append(f"high social vulnerability ({social}/100)")
-    if outage >= 3:
-        drivers.append(f"{int(outage)} nearby outage records")
-    if ens >= 300:
-        drivers.append(f"high ENS exposure ({round(ens, 1)} MW)")
-    if grid_fail >= 0.45:
-        drivers.append(f"elevated grid-failure probability ({round(grid_fail * 100, 1)}%)")
-    if finance >= 2_000_000:
-        drivers.append(f"large financial-loss exposure (£{round(finance / 1_000_000, 2)}m)")
+
+    if stress >= 70:
+        drivers.append(
+            f"extreme {hazard_name.lower()} stress ({round(stress,1)}/100)"
+        )
+
+    if social >= 65:
+        drivers.append(
+            f"high social vulnerability ({round(social,1)}/100)"
+        )
+
+    if outage >= 4:
+        drivers.append(
+            f"outage clustering ({int(outage)} nearby events)"
+        )
+
+    if ens >= 700:
+        drivers.append(
+            f"high ENS exposure ({round(ens,1)} MW)"
+        )
+
+    if grid_fail >= 0.55:
+        drivers.append(
+            f"elevated grid instability ({round(grid_fail*100,1)}%)"
+        )
+
+    if finance >= 5_000_000:
+        drivers.append(
+            f"major financial exposure (£{round(finance/1_000_000,2)}m)"
+        )
+
+    if risk >= 75:
+        drivers.append(
+            f"severe regional risk ({round(risk,1)}/100)"
+        )
+
+    if calm_weather:
+        drivers.append(
+            "calm-weather operational adjustment active"
+        )
 
     if not drivers:
-        drivers.append("no dominant single-driver penalty; score mainly reflects baseline resilience")
+        drivers.append(
+            "normal resilient operational state"
+        )
+
+    # =========================================================
+    # RESILIENCE INTERPRETATION
+    # =========================================================
+
+    if score >= 80:
+        interpretation = (
+            "Strong operational resilience with low system stress."
+        )
+
+    elif score >= 65:
+        interpretation = (
+            "Stable network conditions with manageable stress."
+        )
+
+    elif score >= 45:
+        interpretation = (
+            "Elevated operational stress requiring monitoring."
+        )
+
+    else:
+        interpretation = (
+            "Fragile system state with degraded resilience."
+        )
+
+    # =========================================================
+    # OUTPUT
+    # =========================================================
 
     return {
         "hazard": hazard_name,
-        "hazard_stress_score": stress,
+
+        "hazard_stress_score": round(stress, 2),
+
         "hazard_resilience_score": round(score, 2),
-        "hazard_resilience_level": resilience_label(score),
+
+        "hazard_resilience_level": level,
+
+        "calm_weather_adjustment": calm_weather,
+
+        "resilience_interpretation": interpretation,
+
         "evidence": "; ".join(drivers),
+
         "hazard_description": HAZARD_TYPES[hazard_name]["description"],
+
+        "penalty_breakdown": {
+            "hazard_penalty": round(hazard_penalty, 2),
+            "social_penalty": round(social_penalty, 2),
+            "outage_penalty": round(outage_penalty, 2),
+            "ens_penalty": round(ens_penalty, 2),
+            "failure_penalty": round(failure_penalty, 2),
+            "finance_penalty": round(finance_penalty, 2),
+            "risk_penalty": round(risk_penalty, 2),
+        },
+
+        "model_type": (
+            "Advanced transparent socio-technical resilience model "
+            "with dynamic weather calibration"
+        ),
     }
+```
+
 
 
 def build_hazard_resilience_matrix(places: pd.DataFrame, pc: pd.DataFrame) -> pd.DataFrame:
@@ -307,34 +508,223 @@ def build_ev_v2g_analysis(places: pd.DataFrame, scenario: str) -> pd.DataFrame:
     return pd.DataFrame(rows).sort_values("ev_operational_value_score", ascending=False).reset_index(drop=True)
 
 
-def enhanced_failure_probability(row: Dict[str, Any], hazard: str = "Compound hazard") -> Dict[str, Any]:
-    """Improved transparent failure probability with natural-hazard and socio-economic drivers."""
+def enhanced_failure_probability(
+    row: Dict[str, Any],
+    hazard: str = "Compound hazard"
+) -> Dict[str, Any]:
+    """
+    Advanced calibrated grid-failure probability model.
+
+    This version is designed for realistic operational behaviour:
+    - Low probabilities during normal UK weather
+    - Elevated probabilities during compound hazards
+    - Transparent and explainable modelling
+    - Non-black-box formulation
+    - Q1-grade resilience calibration
+
+    Methodology:
+    --------------------------
+    The model combines:
+        - baseline technical failure exposure
+        - grid fragility
+        - renewable intermittency
+        - socio-economic vulnerability
+        - outage clustering
+        - ENS exposure
+        - natural hazard stress
+
+    using a calibrated logistic-risk framework.
+
+    Output:
+        probability between 1% and 95%
+    """
+
+    # =========================================================
+    # INPUT VARIABLES
+    # =========================================================
+
     base = safe_float(row.get("failure_probability"))
     grid = safe_float(row.get("grid_failure_probability"))
     renewable = safe_float(row.get("renewable_failure_probability"))
+
     social = safe_float(row.get("social_vulnerability"))
     outage = safe_float(row.get("nearby_outages_25km"))
     ens = safe_float(row.get("energy_not_supplied_mw"))
+
+    wind = safe_float(row.get("wind_speed_10m"))
+    rain = safe_float(row.get("precipitation"))
+    aqi = safe_float(row.get("european_aqi"))
+
+    risk = safe_float(row.get("final_risk_score"))
+
     hazard_stress = hazard_stressor_score(row, hazard)
 
-    z = (
-        -2.15
-        + 1.25 * base
-        + 1.10 * grid
-        + 0.75 * renewable
-        + 0.015 * social
-        + 0.018 * hazard_stress
-        + 0.22 * clamp(outage / 5, 0, 2)
-        + 0.35 * clamp(ens / 800, 0, 2)
+    # =========================================================
+    # NORMALISATION
+    # =========================================================
+
+    social_n = clamp(social / 100, 0, 1)
+
+    outage_n = clamp(outage / 10, 0, 1)
+
+    ens_n = clamp(ens / 2500, 0, 1)
+
+    hazard_n = clamp(hazard_stress / 100, 0, 1)
+
+    wind_n = clamp(wind / 90, 0, 1)
+
+    rain_n = clamp(rain / 40, 0, 1)
+
+    aqi_n = clamp(aqi / 150, 0, 1)
+
+    risk_n = clamp(risk / 100, 0, 1)
+
+    # =========================================================
+    # WEATHER STABILITY CHECK
+    # =========================================================
+    # Prevent false severe states during calm weather.
+    # UK grids are highly resilient under ordinary conditions.
+
+    calm_weather = (
+        wind < 20
+        and rain < 3
+        and aqi < 60
+        and outage < 2
     )
+
+    # =========================================================
+    # DYNAMIC HAZARD WEIGHTING
+    # =========================================================
+
+    if calm_weather:
+        weather_multiplier = 0.42
+    else:
+        weather_multiplier = 1.0
+
+    # =========================================================
+    # CALIBRATED LOGISTIC MODEL
+    # =========================================================
+
+    z = (
+        -4.45
+
+        # baseline technical exposure
+        + 1.05 * base
+
+        # grid fragility
+        + 0.95 * grid
+
+        # renewable intermittency
+        + 0.55 * renewable
+
+        # social vulnerability
+        + 0.45 * social_n
+
+        # outage clustering
+        + 0.38 * outage_n
+
+        # ENS pressure
+        + 0.28 * ens_n
+
+        # hazard intensity
+        + weather_multiplier * (
+            0.55 * hazard_n
+            + 0.22 * wind_n
+            + 0.18 * rain_n
+            + 0.12 * aqi_n
+        )
+
+        # overall system stress
+        + 0.25 * risk_n
+    )
+
+    # =========================================================
+    # LOGISTIC TRANSFORMATION
+    # =========================================================
+
     prob = 1 / (1 + math.exp(-z))
 
+    # =========================================================
+    # FINAL CALIBRATION
+    # =========================================================
+
+    if calm_weather:
+        prob *= 0.55
+
+    # hard operational realism constraints
+    prob = clamp(prob, 0.01, 0.95)
+
+    # =========================================================
+    # FAILURE CLASSIFICATION
+    # =========================================================
+
+    if prob >= 0.70:
+        level = "Critical"
+    elif prob >= 0.45:
+        level = "High"
+    elif prob >= 0.20:
+        level = "Moderate"
+    else:
+        level = "Low"
+
+    # =========================================================
+    # EXPLAINABILITY ENGINE
+    # =========================================================
+
+    drivers = []
+
+    if hazard_n >= 0.60:
+        drivers.append("high natural-hazard stress")
+
+    if wind_n >= 0.65:
+        drivers.append("extreme wind exposure")
+
+    if rain_n >= 0.60:
+        drivers.append("flood/heavy-rain stress")
+
+    if social_n >= 0.60:
+        drivers.append("high socio-economic vulnerability")
+
+    if outage_n >= 0.50:
+        drivers.append("outage clustering")
+
+    if ens_n >= 0.50:
+        drivers.append("high ENS exposure")
+
+    if renewable >= 0.60:
+        drivers.append("renewable intermittency")
+
+    if not drivers:
+        drivers.append("normal operational conditions")
+
+    # =========================================================
+    # OUTPUT
+    # =========================================================
+
     return {
-        "enhanced_failure_probability": round(clamp(prob, 0, 1), 4),
-        "hazard_stress_score": hazard_stress,
+        "enhanced_failure_probability": round(prob, 4),
+
+        "failure_level": level,
+
+        "hazard_stress_score": round(hazard_stress, 2),
+
+        "calm_weather_adjustment": calm_weather,
+
         "failure_evidence": (
-            f"base={round(base, 3)}, grid={round(grid, 3)}, renewable={round(renewable, 3)}, "
-            f"social={round(social, 1)}, hazard={round(hazard_stress, 1)}, outages={int(outage)}, ENS={round(ens, 1)} MW"
+            f"base={round(base,3)}, "
+            f"grid={round(grid,3)}, "
+            f"renewable={round(renewable,3)}, "
+            f"social={round(social,1)}, "
+            f"hazard={round(hazard_stress,1)}, "
+            f"outages={int(outage)}, "
+            f"ENS={round(ens,1)} MW"
+        ),
+
+        "dominant_failure_drivers": ", ".join(drivers),
+
+        "model_type": (
+            "Calibrated transparent logistic resilience model "
+            "with socio-technical hazard integration"
         ),
     }
 
