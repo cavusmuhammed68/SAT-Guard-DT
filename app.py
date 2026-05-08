@@ -5266,30 +5266,25 @@ def spatial_tab(
 ) -> None:
 
     """
-    Advanced colourful county-style GIS intelligence engine.
+    Advanced regional GIS intelligence platform.
 
-    Inspired by:
-    - county atlas maps
-    - geopolitical thematic maps
-    - colourful regional intelligence mosaics
-    - Q1-grade spatial digital twins
-
-    This version creates:
-    --------------------------------------------------------
-    • REAL county-style coloured polygons
-    • vivid regional segmentation
-    • administrative-style intelligence zones
-    • proper colourful UK-style thematic rendering
-    • non-square geometries
-    • publication-grade GIS cartography
+    TRUE REGION-LEVEL rendering:
+    -----------------------------------------
+    • full North East regional map
+    • full Yorkshire regional map
+    • county-scale polygons
+    • NOT postcode squares
+    • thematic GIS cartography
+    • colourful administrative regions
+    • Q1-grade visualisation
     """
 
-    import random
-    import pydeck as pdk
+    import json
+    import geopandas as gpd
+    import plotly.express as px
+    import plotly.graph_objects as go
 
-    st.subheader("🌍 Advanced spatial intelligence")
-
-    center = REGIONS[region]["center"]
+    st.subheader("🌍 Regional spatial intelligence")
 
     # =========================================================
     # SAFE DATA
@@ -5298,12 +5293,10 @@ def spatial_tab(
     df = places.copy()
 
     numeric_cols = [
-        "lat",
-        "lon",
         "final_risk_score",
         "resilience_index",
-        "energy_not_supplied_mw",
         "social_vulnerability",
+        "energy_not_supplied_mw",
     ]
 
     for c in numeric_cols:
@@ -5314,234 +5307,133 @@ def spatial_tab(
         ).fillna(0)
 
     # =========================================================
-    # COUNTY-STYLE COLOUR PALETTE
+    # REGION GEOJSON
+    # =========================================================
+    # USE REAL ADMINISTRATIVE REGIONS
+    # NOT SMALL POINT POLYGONS
     # =========================================================
 
-    vibrant_palette = [
-        [255, 87, 34],      # orange-red
-        [156, 39, 176],     # purple
-        [0, 188, 212],      # cyan
-        [255, 235, 59],     # yellow
-        [76, 175, 80],      # green
-        [255, 152, 0],      # orange
-        [233, 30, 99],      # pink
-        [63, 81, 181],      # indigo
-        [139, 195, 74],     # lime
-        [3, 169, 244],      # blue
-    ]
+    if region == "North East":
 
-    # =========================================================
-    # CREATE ORGANIC COUNTY POLYGONS
-    # =========================================================
+        geojson_path = "data/northeast_counties.geojson"
 
-    polygon_data = []
-
-    random.seed(42)
-
-    for idx, row in df.iterrows():
-
-        lat = float(row["lat"])
-        lon = float(row["lon"])
-
-        score = float(row["final_risk_score"])
-
-        colour = vibrant_palette[idx % len(vibrant_palette)]
-
-        # =====================================================
-        # ORGANIC COUNTY SHAPE
-        # =====================================================
-
-        scale = 0.10 + (score / 100) * 0.06
-
-        polygon = [
-
-            [
-                lon - scale * random.uniform(0.8, 1.3),
-                lat - scale * random.uniform(0.6, 1.2)
-            ],
-
-            [
-                lon - scale * random.uniform(0.2, 0.6),
-                lat + scale * random.uniform(0.7, 1.4)
-            ],
-
-            [
-                lon + scale * random.uniform(0.4, 1.4),
-                lat + scale * random.uniform(0.3, 1.0)
-            ],
-
-            [
-                lon + scale * random.uniform(0.7, 1.5),
-                lat - scale * random.uniform(0.2, 0.8)
-            ],
-
-            [
-                lon + scale * random.uniform(0.2, 0.7),
-                lat - scale * random.uniform(0.8, 1.5)
-            ],
-
-            [
-                lon - scale * random.uniform(0.7, 1.2),
-                lat - scale * random.uniform(0.7, 1.0)
-            ],
+        regional_places = [
+            "Newcastle",
+            "Sunderland",
+            "Durham",
+            "Middlesbrough",
+            "Darlington",
+            "Hexham",
+            "Northumberland",
+            "Tyne and Wear",
+            "County Durham",
+            "Redcar and Cleveland",
         ]
 
-        polygon_data.append({
+    elif region == "Yorkshire":
 
-            "polygon": polygon,
+        geojson_path = "data/yorkshire_counties.geojson"
 
-            "place": row["place"],
+        regional_places = [
+            "Leeds",
+            "Bradford",
+            "York",
+            "Sheffield",
+            "Hull",
+            "Wakefield",
+            "Doncaster",
+            "Rotherham",
+            "Barnsley",
+            "North Yorkshire",
+            "East Riding",
+        ]
 
-            "risk": round(score, 1),
+    else:
 
-            "resilience": round(
-                float(row["resilience_index"]),
-                1
-            ),
+        geojson_path = "data/uk_regions.geojson"
 
-            "ens": round(
-                float(row["energy_not_supplied_mw"]),
-                1
-            ),
-
-            "social": round(
-                float(row["social_vulnerability"]),
-                1
-            ),
-
-            "fill_color": colour,
-        })
+        regional_places = list(df["place"].unique())
 
     # =========================================================
-    # MAIN POLYGON LAYER
+    # LOAD GEOJSON
     # =========================================================
 
-    polygon_layer = pdk.Layer(
-        "PolygonLayer",
+    try:
 
-        polygon_data,
+        gdf = gpd.read_file(geojson_path)
 
-        get_polygon="polygon",
+    except Exception:
 
-        get_fill_color="fill_color",
+        st.error(
+            "Regional GeoJSON file missing. "
+            "Please add official county boundary files."
+        )
 
-        get_line_color=[20, 20, 20],
+        return
 
-        line_width_min_pixels=2.5,
+    # =========================================================
+    # AGGREGATE RISK
+    # =========================================================
 
-        opacity=0.82,
+    risk_lookup = {}
 
-        pickable=True,
+    for place in regional_places:
 
-        stroked=True,
+        subset = df[
+            df["place"]
+            .astype(str)
+            .str.contains(place, case=False, na=False)
+        ]
 
-        filled=True,
+        if subset.empty:
 
-        auto_highlight=True,
+            risk_lookup[place] = 35
+
+        else:
+
+            risk_lookup[place] = round(
+                subset["final_risk_score"].mean(),
+                2
+            )
+
+    # =========================================================
+    # MAP SCORES TO REGIONS
+    # =========================================================
+
+    gdf["risk_score"] = gdf["name"].map(
+        lambda x: risk_lookup.get(x, 30)
     )
 
     # =========================================================
-    # TEXT LABELS
+    # CLASSIFICATION
     # =========================================================
 
-    label_data = []
+    def classify(score):
 
-    for row in polygon_data:
+        if score >= 75:
+            return "Critical"
 
-        coords = row["polygon"][0]
+        elif score >= 55:
+            return "High"
 
-        label_data.append({
-            "position": coords,
-            "text": row["place"]
-        })
+        elif score >= 35:
+            return "Moderate"
 
-    text_layer = pdk.Layer(
-        "TextLayer",
+        else:
+            return "Low"
 
-        label_data,
-
-        get_position="position",
-
-        get_text="text",
-
-        get_size=16,
-
-        get_color=[0, 0, 0],
-
-        get_angle=0,
-
-        get_text_anchor="'middle'",
-
-        get_alignment_baseline="'center'",
-    )
+    gdf["risk_class"] = gdf["risk_score"].apply(classify)
 
     # =========================================================
-    # VIEW STATE
+    # COLOURFUL THEMATIC PALETTE
     # =========================================================
 
-    view_state = pdk.ViewState(
-
-        latitude=center["lat"],
-
-        longitude=center["lon"],
-
-        zoom=center["zoom"] - 0.2,
-
-        pitch=0,
-
-        bearing=0,
-    )
-
-    # =========================================================
-    # TOOLTIP
-    # =========================================================
-
-    tooltip = {
-
-        "html": """
-
-        <div style="
-            background:#111827;
-            padding:14px;
-            border-radius:10px;
-            color:white;
-            border:1px solid rgba(255,255,255,0.1);
-        ">
-
-        <h3>{place}</h3>
-
-        <b>Regional risk:</b> {risk}/100<br/>
-        <b>Resilience:</b> {resilience}/100<br/>
-        <b>ENS:</b> {ens} MW<br/>
-        <b>Social vulnerability:</b> {social}/100
-
-        </div>
-
-        """,
-
-        "style": {
-            "backgroundColor": "#111827",
-            "color": "white"
-        },
+    colour_map = {
+        "Critical": "#ff006e",
+        "High": "#ff8500",
+        "Moderate": "#00b4ff",
+        "Low": "#70e000",
     }
-
-    # =========================================================
-    # DECK
-    # =========================================================
-
-    deck = pdk.Deck(
-
-        map_style="mapbox://styles/mapbox/light-v11",
-
-        initial_view_state=view_state,
-
-        layers=[
-            polygon_layer,
-            text_layer,
-        ],
-
-        tooltip=tooltip,
-    )
 
     # =========================================================
     # HEADER
@@ -5552,26 +5444,26 @@ def spatial_tab(
         <div style="
             background:linear-gradient(
                 90deg,
+                #020617,
                 #0f172a,
-                #111827,
-                #1e293b
+                #111827
             );
             padding:18px;
-            border-radius:16px;
+            border-radius:18px;
             margin-bottom:18px;
             border:1px solid rgba(255,255,255,0.08);
         ">
 
         <h2 style="margin:0;color:white;">
-        🗺️ Colourful county-style intelligence map
+        🗺️ {region} regional intelligence system
         </h2>
 
         <div style="
             color:#cbd5e1;
             margin-top:8px;
         ">
-        Administrative-style regional segmentation inspired by
-        thematic UK county cartography and spatial intelligence systems.
+        County-scale operational GIS intelligence,
+        resilience zoning and infrastructure risk mapping.
         </div>
 
         </div>
@@ -5581,11 +5473,82 @@ def spatial_tab(
     )
 
     # =========================================================
-    # RENDER MAP
+    # MAIN CHOROPLETH
     # =========================================================
 
-    st.pydeck_chart(
-        deck,
+    fig = px.choropleth_mapbox(
+
+        gdf,
+
+        geojson=json.loads(gdf.to_json()),
+
+        locations=gdf.index,
+
+        color="risk_class",
+
+        hover_name="name",
+
+        hover_data={
+            "risk_score": True,
+            "risk_class": True,
+        },
+
+        color_discrete_map=colour_map,
+
+        featureidkey="properties.index",
+
+        center={
+            "lat": REGIONS[region]["center"]["lat"],
+            "lon": REGIONS[region]["center"]["lon"],
+        },
+
+        zoom=REGIONS[region]["center"]["zoom"] - 0.3,
+
+        opacity=0.88,
+
+        mapbox_style="carto-positron",
+    )
+
+    # =========================================================
+    # BOUNDARY STYLING
+    # =========================================================
+
+    fig.update_traces(
+
+        marker_line_width=2.2,
+
+        marker_line_color="black",
+    )
+
+    # =========================================================
+    # LAYOUT
+    # =========================================================
+
+    fig.update_layout(
+
+        height=760,
+
+        margin=dict(
+            l=10,
+            r=10,
+            t=10,
+            b=10
+        ),
+
+        legend_title_text="Operational risk",
+
+        paper_bgcolor="#020617",
+
+        plot_bgcolor="#020617",
+
+        font=dict(
+            color="white",
+            size=14
+        ),
+    )
+
+    st.plotly_chart(
+        fig,
         use_container_width=True
     )
 
@@ -5593,107 +5556,75 @@ def spatial_tab(
     # LEGEND
     # =========================================================
 
-    st.markdown("### 🎨 Regional intelligence legend")
-
-    legend_html = """
-    <div style="
-        display:flex;
-        flex-wrap:wrap;
-        gap:12px;
-        margin-bottom:18px;
-    ">
-    """
-
-    legend_labels = [
-        "Operational core",
-        "Critical infrastructure",
-        "Industrial cluster",
-        "Urban demand zone",
-        "Renewable corridor",
-        "High-voltage dependency",
-        "Flood interaction zone",
-        "Socio-economic stress zone",
-        "Resilient district",
-        "Strategic reserve zone",
-    ]
-
-    for colour, label in zip(vibrant_palette, legend_labels):
-
-        rgb = f"rgb({colour[0]},{colour[1]},{colour[2]})"
-
-        legend_html += f"""
-
-        <div style="
-            background:{rgb};
-            color:black;
-            padding:8px 14px;
-            border-radius:10px;
-            font-weight:700;
-            font-size:13px;
-        ">
-        {label}
-        </div>
-
-        """
-
-    legend_html += "</div>"
+    st.markdown("## 🎨 Regional intelligence legend")
 
     st.markdown(
-        legend_html,
+        """
+        <div style="
+            display:flex;
+            flex-wrap:wrap;
+            gap:14px;
+            margin-bottom:20px;
+        ">
+
+        <div style="
+            background:#70e000;
+            color:black;
+            padding:10px 16px;
+            border-radius:12px;
+            font-weight:700;
+        ">
+        Low risk
+        </div>
+
+        <div style="
+            background:#00b4ff;
+            color:white;
+            padding:10px 16px;
+            border-radius:12px;
+            font-weight:700;
+        ">
+        Moderate risk
+        </div>
+
+        <div style="
+            background:#ff8500;
+            color:white;
+            padding:10px 16px;
+            border-radius:12px;
+            font-weight:700;
+        ">
+        High risk
+        </div>
+
+        <div style="
+            background:#ff006e;
+            color:white;
+            padding:10px 16px;
+            border-radius:12px;
+            font-weight:700;
+        ">
+        Critical risk
+        </div>
+
+        </div>
+        """,
+
         unsafe_allow_html=True,
     )
 
+    # =========================================================
+    # SPATIAL ANALYTICS
+    # =========================================================
+
     st.markdown("---")
-
-    # =========================================================
-    # ANALYTICAL GIS
-    # =========================================================
-
-    st.markdown("## 📊 Spatial intelligence analytics")
+    st.markdown("## 📊 Regional spatial analytics")
 
     a, b = st.columns(2)
 
     with a:
 
-        fig = px.density_mapbox(
-
-            df,
-
-            lat="lat",
-
-            lon="lon",
-
-            z="final_risk_score",
-
-            radius=40,
-
-            center={
-                "lat": center["lat"],
-                "lon": center["lon"]
-            },
-
-            zoom=center["zoom"],
-
-            mapbox_style="carto-positron",
-
-            color_continuous_scale="Turbo",
-
-            title="Regional grid-risk propagation",
-        )
-
-        fig.update_layout(
-            height=520,
-            margin=dict(l=10, r=10, t=55, b=10),
-        )
-
-        st.plotly_chart(
-            fig,
-            use_container_width=True
-        )
-
-    with b:
-
-        fig = px.scatter(
+        fig2 = px.scatter(
 
             df,
 
@@ -5714,18 +5645,54 @@ def spatial_tab(
             title="Socio-technical resilience clustering",
         )
 
-        fig.update_layout(
-            height=520,
-            margin=dict(l=10, r=10, t=55, b=10),
+        fig2.update_layout(
+            height=500
         )
 
         st.plotly_chart(
-            fig,
+            fig2,
+            use_container_width=True
+        )
+
+    with b:
+
+        fig3 = px.density_mapbox(
+
+            df,
+
+            lat="lat",
+
+            lon="lon",
+
+            z="final_risk_score",
+
+            radius=38,
+
+            center={
+                "lat": REGIONS[region]["center"]["lat"],
+                "lon": REGIONS[region]["center"]["lon"],
+            },
+
+            zoom=REGIONS[region]["center"]["zoom"],
+
+            mapbox_style="carto-darkmatter",
+
+            color_continuous_scale="Turbo",
+
+            title="Systemic operational stress",
+        )
+
+        fig3.update_layout(
+            height=500
+        )
+
+        st.plotly_chart(
+            fig3,
             use_container_width=True
         )
 
     # =========================================================
-    # PROFESSIONAL INTERPRETATION
+    # INTERPRETATION
     # =========================================================
 
     st.markdown("---")
@@ -5734,24 +5701,23 @@ def spatial_tab(
         """
         <div class="note">
 
-        <b>County-style spatial interpretation</b><br><br>
+        <b>Regional intelligence interpretation</b><br><br>
 
-        • Each polygon represents an intelligence region.<br>
-        • Colours represent operational segmentation.<br>
-        • Spatial clustering highlights infrastructure dependency.<br>
-        • Thematic zoning improves digital-twin readability.<br><br>
+        This system uses county-scale GIS polygons rather than
+        postcode blocks or artificial rectangles.<br><br>
 
-        The map is intentionally styled like
-        geopolitical county atlases to improve:
+        • Each coloured area represents a real operational region.<br>
+        • Boundaries follow administrative spatial logic.<br>
+        • Colours represent resilience and infrastructure stress.<br>
+        • Spatial clustering identifies cascading operational risk.<br><br>
 
-        • spatial cognition  
-        • operational zoning  
-        • infrastructure readability  
-        • resilience interpretation  
-        • publication-quality GIS storytelling  
+        The visualisation is intentionally designed to resemble
+        thematic geopolitical atlas maps for improved readability,
+        operational cognition and publication-quality GIS storytelling.
 
         </div>
         """,
+
         unsafe_allow_html=True,
     )
 
