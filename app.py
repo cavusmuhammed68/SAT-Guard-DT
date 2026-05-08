@@ -5255,95 +5255,343 @@ def render_colourful_regional_map(region: str, places: pd.DataFrame) -> None:
         unsafe_allow_html=True,
     )
 
-def spatial_tab(region: str, places: pd.DataFrame, outages: pd.DataFrame, pc: pd.DataFrame, grid: pd.DataFrame, map_mode: str) -> None:
-    st.subheader("Satellite + infrastructure + grid-risk intelligence")
+
+def spatial_tab(
+    region: str,
+    places: pd.DataFrame,
+    outages: pd.DataFrame,
+    pc: pd.DataFrame,
+    grid: pd.DataFrame,
+    map_mode: str
+) -> None:
+
+    """
+    Q1-grade spatial intelligence system.
+
+    Features:
+    ------------------------------------------------
+    • cinematic GIS rendering
+    • colourful polygon intelligence zones
+    • live outage intelligence
+    • infrastructure-aware overlays
+    • regional risk segmentation
+    • spatial vulnerability analytics
+    • operational resilience cartography
+    • publication-grade dark-theme mapping
+    """
+
+    st.subheader("Satellite + infrastructure + spatial intelligence")
 
     center = REGIONS[region]["center"]
 
-    # =========================
-    # COLOURFUL REGIONAL MOSAIC MAP
-    # =========================
-    st.markdown("### 🗺️ Colourful regional risk mosaic")
-    render_colourful_regional_map(region, places)
-    st.markdown("---")
+    # =========================================================
+    # SAFE DATA
+    # =========================================================
 
-    # =========================
-    # 🔥 1. PYDECK (MAIN ENGINE)
-    # =========================
-    st.markdown("### 🌍 Digital twin (3D infrastructure + hazard layers)")
-
-    try:
-        render_pydeck_map(region, places, outages, pc, grid, map_mode)
-    except Exception as e:
-        st.warning(f"PyDeck layer failed, falling back to analytical maps ({e})")
-
-    st.markdown("---")
-
-    # =========================
-    # 🔥 2. SAFE DATA
-    # =========================
     df = places.copy()
 
-    df["final_risk_score"] = pd.to_numeric(df.get("final_risk_score"), errors="coerce").fillna(0)
-    df["resilience_index"] = pd.to_numeric(df.get("resilience_index"), errors="coerce").fillna(0)
-    df["energy_not_supplied_mw"] = pd.to_numeric(df.get("energy_not_supplied_mw"), errors="coerce").fillna(0)
-    df["social_vulnerability"] = pd.to_numeric(df.get("social_vulnerability"), errors="coerce").fillna(0)
+    numeric_cols = [
+        "final_risk_score",
+        "resilience_index",
+        "energy_not_supplied_mw",
+        "social_vulnerability",
+        "grid_failure_probability",
+    ]
 
-    # =========================
-    # 🔥 3. ANALYTICS MAP (CLEAN)
-    # =========================
-    st.markdown("### 📊 Analytical spatial view")
-    render_colour_legend("risk")
+    for c in numeric_cols:
+        df[c] = pd.to_numeric(
+            df.get(c),
+            errors="coerce"
+        ).fillna(0)
 
-    fig = px.scatter_mapbox(
-        df,
-        lat="lat",
-        lon="lon",
-        color="final_risk_score",
-        size="energy_not_supplied_mw",
-        hover_name="place",
-        hover_data={
-            "final_risk_score": True,
-            "resilience_index": True,
-            "social_vulnerability": True,
-            "energy_not_supplied_mw": True,
-        },
-        color_continuous_scale="Turbo",
-        size_max=40,
+    # =========================================================
+    # RISK ZONING
+    # =========================================================
+
+    def classify_zone(score):
+
+        if score >= 80:
+            return "Critical"
+
+        elif score >= 60:
+            return "High"
+
+        elif score >= 40:
+            return "Moderate"
+
+        else:
+            return "Low"
+
+    df["risk_zone"] = df["final_risk_score"].apply(classify_zone)
+
+    # =========================================================
+    # CINEMATIC COLOUR PALETTE
+    # =========================================================
+
+    zone_colours = {
+        "Critical": [255, 0, 110],
+        "High": [255, 140, 0],
+        "Moderate": [0, 180, 255],
+        "Low": [120, 220, 0],
+    }
+
+    # =========================================================
+    # HEADER
+    # =========================================================
+
+    st.markdown(
+        f"""
+        <div style="
+            background: linear-gradient(90deg,#020617,#0f172a,#111827);
+            border-radius: 18px;
+            padding: 16px;
+            border:1px solid rgba(255,255,255,0.08);
+            margin-bottom:18px;
+        ">
+            <h2 style="margin:0;color:white;">
+                🛰️ Spatial intelligence engine — {region}
+            </h2>
+
+            <div style="
+                color:#cbd5e1;
+                margin-top:8px;
+                font-size:14px;
+            ">
+            Real-time grid intelligence, regional risk segmentation,
+            infrastructure exposure, resilience clustering and
+            socio-technical operational analytics.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # =========================================================
+    # PROFESSIONAL GIS MOSAIC
+    # =========================================================
+
+    st.markdown("## 🌍 Regional intelligence mosaic")
+
+    import pydeck as pdk
+
+    polygon_data = []
+
+    for _, r in df.iterrows():
+
+        lat = float(r["lat"])
+        lon = float(r["lon"])
+
+        score = float(r["final_risk_score"])
+
+        zone = r["risk_zone"]
+
+        colour = zone_colours[zone]
+
+        # dynamic polygon size
+        spread = 0.16 + (score / 100) * 0.08
+
+        polygon = [
+            [lon - spread, lat - spread],
+            [lon + spread, lat - spread],
+            [lon + spread, lat + spread],
+            [lon - spread, lat + spread],
+        ]
+
+        polygon_data.append({
+            "polygon": polygon,
+            "place": r["place"],
+            "risk": score,
+            "resilience": r["resilience_index"],
+            "ens": r["energy_not_supplied_mw"],
+            "zone": zone,
+            "fill_color": colour,
+        })
+
+    polygon_layer = pdk.Layer(
+        "PolygonLayer",
+        polygon_data,
+        get_polygon="polygon",
+        get_fill_color="fill_color",
+        get_line_color=[255, 255, 255],
+        line_width_min_pixels=2,
+        opacity=0.72,
+        pickable=True,
+        stroked=True,
+        filled=True,
+        auto_highlight=True,
+    )
+
+    text_layer = pdk.Layer(
+        "TextLayer",
+        polygon_data,
+        get_position="[polygon][0]",
+        get_text="place",
+        get_size=15,
+        get_color=[255,255,255],
+        get_angle=0,
+        pickable=False,
+    )
+
+    view_state = pdk.ViewState(
+        latitude=center["lat"],
+        longitude=center["lon"],
         zoom=center["zoom"],
-        height=520,
+        pitch=32,
+        bearing=-8,
     )
 
-    fig.update_layout(
-        mapbox_style="carto-darkmatter",
-        mapbox_center={"lat": center["lat"], "lon": center["lon"]},
-        margin=dict(l=10, r=10, t=40, b=10),
-        coloraxis_colorbar=dict(title="Risk"),
+    tooltip = {
+        "html": """
+        <div style='padding:10px'>
+            <b>{place}</b><br/>
+            Risk: <b>{risk}</b>/100<br/>
+            Zone: <b>{zone}</b><br/>
+            Resilience: <b>{resilience}</b>/100<br/>
+            ENS: <b>{ens}</b> MW
+        </div>
+        """,
+        "style": {
+            "backgroundColor": "#0f172a",
+            "color": "white",
+            "border": "1px solid rgba(255,255,255,0.1)"
+        },
+    }
+
+    deck = pdk.Deck(
+        map_style="mapbox://styles/mapbox/dark-v11",
+        initial_view_state=view_state,
+        layers=[
+            polygon_layer,
+            text_layer,
+        ],
+        tooltip=tooltip,
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.pydeck_chart(deck, use_container_width=True)
 
-    # =========================
-    # 🔥 4. SECONDARY ANALYTICS
-    # =========================
+    # =========================================================
+    # COLOUR LEGEND
+    # =========================================================
+
+    st.markdown(
+        """
+        <div style="
+            display:flex;
+            gap:16px;
+            flex-wrap:wrap;
+            margin-top:10px;
+            margin-bottom:20px;
+        ">
+
+        <div style="
+            background:#7cd600;
+            padding:8px 14px;
+            border-radius:10px;
+            color:black;
+            font-weight:700;
+        ">
+        Low risk
+        </div>
+
+        <div style="
+            background:#00b4ff;
+            padding:8px 14px;
+            border-radius:10px;
+            color:white;
+            font-weight:700;
+        ">
+        Moderate risk
+        </div>
+
+        <div style="
+            background:#ff8c00;
+            padding:8px 14px;
+            border-radius:10px;
+            color:white;
+            font-weight:700;
+        ">
+        High risk
+        </div>
+
+        <div style="
+            background:#ff006e;
+            padding:8px 14px;
+            border-radius:10px;
+            color:white;
+            font-weight:700;
+        ">
+        Critical risk
+        </div>
+
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("---")
+
+    # =========================================================
+    # ADVANCED DIGITAL TWIN
+    # =========================================================
+
+    st.markdown("## ⚡ 3D infrastructure intelligence")
+
+    try:
+        render_pydeck_map(
+            region,
+            places,
+            outages,
+            pc,
+            grid,
+            map_mode
+        )
+
+    except Exception as e:
+
+        st.warning(
+            f"3D infrastructure engine fallback activated ({e})"
+        )
+
+    st.markdown("---")
+
+    # =========================================================
+    # ANALYTICAL GIS
+    # =========================================================
+
+    st.markdown("## 📊 Risk propagation analytics")
+
     a, b = st.columns(2)
 
     with a:
+
         fig = px.density_mapbox(
             df,
             lat="lat",
             lon="lon",
             z="final_risk_score",
-            radius=35,
-            center={"lat": center["lat"], "lon": center["lon"]},
+            radius=42,
+            center={
+                "lat": center["lat"],
+                "lon": center["lon"]
+            },
             zoom=center["zoom"],
             mapbox_style="carto-darkmatter",
-            title="Systemic risk clustering",
+            color_continuous_scale="Turbo",
+            title="Systemic grid-risk propagation",
         )
-        fig.update_layout(height=420, margin=dict(l=10, r=10, t=55, b=10))
-        st.plotly_chart(fig, use_container_width=True)
+
+        fig.update_layout(
+            height=480,
+            margin=dict(l=10, r=10, t=55, b=10),
+        )
+
+        st.plotly_chart(
+            fig,
+            use_container_width=True
+        )
 
     with b:
+
         fig = px.scatter(
             df,
             x="social_vulnerability",
@@ -5352,71 +5600,109 @@ def spatial_tab(region: str, places: pd.DataFrame, outages: pd.DataFrame, pc: pd
             color="resilience_index",
             hover_name="place",
             color_continuous_scale="Turbo",
-            title="Vulnerability vs grid risk",
+            title="Socio-technical vulnerability clustering",
             template=plotly_template(),
         )
-        fig.update_layout(height=420, margin=dict(l=10, r=10, t=55, b=10))
-        st.plotly_chart(fig, use_container_width=True)
 
-    # =========================
-    # 🔥 5. OUTAGE OVERLAY
-    # =========================
+        fig.update_layout(
+            height=480,
+            margin=dict(l=10, r=10, t=55, b=10),
+        )
+
+        st.plotly_chart(
+            fig,
+            use_container_width=True
+        )
+
+    # =========================================================
+    # LIVE OUTAGE INTELLIGENCE
+    # =========================================================
+
     if outages is not None and not outages.empty:
-        st.markdown("### ⚡ Live outage layer")
 
-        outages_map = outages.copy()
-        outages_map["latitude"] = pd.to_numeric(outages_map.get("latitude"), errors="coerce")
-        outages_map["longitude"] = pd.to_numeric(outages_map.get("longitude"), errors="coerce")
-        outages_map["affected_customers"] = pd.to_numeric(outages_map.get("affected_customers"), errors="coerce").fillna(0)
+        st.markdown("---")
+        st.markdown("## ⚡ Live outage intelligence")
+
+        om = outages.copy()
+
+        om["latitude"] = pd.to_numeric(
+            om.get("latitude"),
+            errors="coerce"
+        )
+
+        om["longitude"] = pd.to_numeric(
+            om.get("longitude"),
+            errors="coerce"
+        )
+
+        om["affected_customers"] = pd.to_numeric(
+            om.get("affected_customers"),
+            errors="coerce"
+        ).fillna(0)
 
         fig = px.scatter_mapbox(
-            outages_map,
+            om,
             lat="latitude",
             lon="longitude",
             size="affected_customers",
             color="affected_customers",
             color_continuous_scale="Reds",
-            size_max=30,
+            size_max=36,
             zoom=center["zoom"],
-            height=420,
+            hover_name="postcode",
+            height=520,
         )
 
         fig.update_layout(
             mapbox_style="carto-darkmatter",
-            mapbox_center={"lat": center["lat"], "lon": center["lon"]},
+            mapbox_center={
+                "lat": center["lat"],
+                "lon": center["lon"]
+            },
             margin=dict(l=10, r=10, t=40, b=10),
         )
 
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(
+            fig,
+            use_container_width=True
+        )
 
-    # =========================
-    # 🔥 6. PROFESSIONAL INTERPRETATION
-    # =========================
+    # =========================================================
+    # PROFESSIONAL INTERPRETATION
+    # =========================================================
+
+    st.markdown("---")
+
     st.markdown(
         """
         <div class="note">
-        <b>Digital twin interpretation:</b><br><br>
 
-        • 3D map → real infrastructure + risk propagation<br>
-        • Column height → grid stress / load / ENS<br>
-        • Colour → system risk intensity<br>
-        • Heatmap → systemic clustering zones<br><br>
+        <b>Spatial intelligence interpretation</b><br><br>
 
-        High-risk zones emerge where:
-        • transmission dependency is high  
-        • substations are spatially concentrated  
-        • flood exposure overlaps infrastructure  
-        • social vulnerability amplifies impact  
+        • Regional polygons represent operational intelligence zones.<br>
+        • Colour intensity reflects systemic risk exposure.<br>
+        • Polygon size reflects regional operational stress.<br>
+        • Density layers identify cascading risk propagation.<br>
+        • 3D infrastructure layers visualise energy-system topology.<br><br>
 
-        This enables targeting of:
-        • resilience investment  
-        • EV/V2G deployment  
-        • storage optimisation  
-        • outage mitigation strategies  
+        <b>Critical intelligence factors:</b><br>
+
+        • transmission dependency<br>
+        • outage clustering<br>
+        • ENS escalation<br>
+        • socio-economic vulnerability<br>
+        • infrastructure concentration<br>
+        • weather-driven operational stress<br><br>
+
+        The spatial engine is designed as a publication-grade
+        digital twin intelligence platform for resilient smart-grid
+        analysis and operational planning.
+
         </div>
         """,
         unsafe_allow_html=True,
     )
+
 
 def resilience_tab(places: pd.DataFrame) -> None:
     st.subheader("Resilience analysis")
