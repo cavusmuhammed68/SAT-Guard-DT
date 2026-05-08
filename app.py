@@ -1578,13 +1578,13 @@ SCENARIOS = {
     # WIND STORM
     # =========================
     "Extreme wind": {
-        "wind": 1.95,
-        "rain": 1.10,
-        "temperature": -1.0,
-        "aqi": 1.05,
-        "solar": 0.82,
-        "outage": 1.35,
-        "finance": 1.25,
+        "wind": 3.60,
+        "rain": 1.45,
+        "temperature": -2.0,
+        "aqi": 1.12,
+        "solar": 0.72,
+        "outage": 3.10,
+        "finance": 2.15,
         "hazard_mode": "wind",
         "description": "Severe wind event stressing overhead lines and exposed assets.",
     },
@@ -1593,13 +1593,13 @@ SCENARIOS = {
     # FLOOD (FIXED NAME)
     # =========================
     "Flood": {
-        "wind": 1.25,
-        "rain": 3.40,
+        "wind": 1.55,
+        "rain": 7.50,
         "temperature": 0.5,
-        "aqi": 1.12,
-        "solar": 0.40,
-        "outage": 2.00,
-        "finance": 1.60,
+        "aqi": 1.18,
+        "solar": 0.28,
+        "outage": 3.60,
+        "finance": 2.40,
         "hazard_mode": "rain",
         "description": "Extreme rainfall and surface flooding impacting substations and underground infrastructure.",
     },
@@ -1608,13 +1608,13 @@ SCENARIOS = {
     # HEATWAVE (NEW)
     # =========================
     "Heatwave": {
-        "wind": 0.85,
-        "rain": 0.20,
-        "temperature": 7.5,
-        "aqi": 1.35,
-        "solar": 1.20,
-        "outage": 1.25,
-        "finance": 1.45,
+        "wind": 0.75,
+        "rain": 0.10,
+        "temperature": 13.0,
+        "aqi": 2.15,
+        "solar": 1.35,
+        "outage": 2.15,
+        "finance": 2.00,
         "hazard_mode": "heat",
         "description": "High temperature stress increasing demand peaks, transformer heating and failure risk.",
     },
@@ -1623,13 +1623,13 @@ SCENARIOS = {
     # DROUGHT / LOW RENEWABLE
     # =========================
     "Drought": {
-        "wind": 0.30,
-        "rain": 0.15,
-        "temperature": 3.0,
-        "aqi": 1.20,
-        "solar": 0.25,
-        "outage": 1.15,
-        "finance": 1.40,
+        "wind": 0.22,
+        "rain": 0.05,
+        "temperature": 6.5,
+        "aqi": 1.65,
+        "solar": 0.18,
+        "outage": 2.30,
+        "finance": 2.10,
         "hazard_mode": "calm",
         "description": "Prolonged low wind and solar generation reducing renewable supply and increasing system stress.",
     },
@@ -1638,13 +1638,13 @@ SCENARIOS = {
     # BLACKOUT STRESS
     # =========================
     "Total blackout stress": {
-        "wind": 1.10,
-        "rain": 1.20,
+        "wind": 1.35,
+        "rain": 1.50,
         "temperature": 0.0,
-        "aqi": 1.10,
-        "solar": 0.55,
-        "outage": 4.00,
-        "finance": 2.50,
+        "aqi": 1.35,
+        "solar": 0.35,
+        "outage": 7.00,
+        "finance": 4.20,
         "hazard_mode": "blackout",
         "description": "Extreme outage clustering and cascading failures across the network.",
     },
@@ -1653,13 +1653,13 @@ SCENARIOS = {
     # COMPOUND HAZARD
     # =========================
     "Compound extreme": {
-        "wind": 2.00,
-        "rain": 2.80,
-        "temperature": 6.0,
-        "aqi": 1.80,
-        "solar": 0.30,
-        "outage": 2.80,
-        "finance": 2.10,
+        "wind": 3.25,
+        "rain": 6.50,
+        "temperature": 8.0,
+        "aqi": 2.20,
+        "solar": 0.20,
+        "outage": 5.80,
+        "finance": 3.80,
         "hazard_mode": "storm",
         "description": "Combined wind, flood, heat and system stress representing multi-hazard disruption.",
     },
@@ -2819,6 +2819,57 @@ def apply_scenario(row: Dict[str, Any], scenario_name: str) -> Dict[str, Any]:
     return r
 
 
+
+
+
+def scenario_stress_profile(scenario_name: str) -> Dict[str, float]:
+    """
+    Explicit what-if stress profile.
+
+    Live / Real-time uses measured conditions and is deliberately conservative.
+    All other scenarios are counterfactual stress tests, so they must increase
+    risk, ENS, grid-failure probability, financial exposure and reduce resilience.
+    This prevents the what-if panel from looking safer than the live baseline.
+    """
+    profiles = {
+        "Live / Real-time": {
+            "risk_floor": 0, "risk_boost": 0, "failure_floor": 0.01,
+            "grid_floor": 0.01, "ens_load_factor": 0.00, "resilience_penalty": 0,
+            "min_outages": 0, "min_customers": 0,
+        },
+        "Extreme wind": {
+            "risk_floor": 72, "risk_boost": 24, "failure_floor": 0.46,
+            "grid_floor": 0.42, "ens_load_factor": 1.05, "resilience_penalty": 18,
+            "min_outages": 5, "min_customers": 1400,
+        },
+        "Flood": {
+            "risk_floor": 76, "risk_boost": 28, "failure_floor": 0.52,
+            "grid_floor": 0.48, "ens_load_factor": 1.20, "resilience_penalty": 22,
+            "min_outages": 6, "min_customers": 1800,
+        },
+        "Heatwave": {
+            "risk_floor": 66, "risk_boost": 18, "failure_floor": 0.34,
+            "grid_floor": 0.30, "ens_load_factor": 0.72, "resilience_penalty": 14,
+            "min_outages": 3, "min_customers": 850,
+        },
+        "Drought": {
+            "risk_floor": 64, "risk_boost": 16, "failure_floor": 0.32,
+            "grid_floor": 0.30, "ens_load_factor": 0.62, "resilience_penalty": 12,
+            "min_outages": 2, "min_customers": 650,
+        },
+        "Total blackout stress": {
+            "risk_floor": 92, "risk_boost": 42, "failure_floor": 0.82,
+            "grid_floor": 0.78, "ens_load_factor": 2.40, "resilience_penalty": 44,
+            "min_outages": 12, "min_customers": 4200,
+        },
+        "Compound extreme": {
+            "risk_floor": 88, "risk_boost": 38, "failure_floor": 0.74,
+            "grid_floor": 0.68, "ens_load_factor": 2.00, "resilience_penalty": 36,
+            "min_outages": 9, "min_customers": 3200,
+        },
+    }
+    return profiles.get(scenario_name, profiles["Live / Real-time"])
+
 def renewable_generation_mw(row: Dict[str, Any]) -> float:
     solar = safe_float(row.get("shortwave_radiation"))
     wind = safe_float(row.get("wind_speed_10m"))
@@ -3208,9 +3259,19 @@ def build_places(region: str, scenario_name: str, mc_runs: int) -> Tuple[pd.Data
                 nearby += 1
                 affected_customers += customers
 
+        stress_profile = scenario_stress_profile(scenario_name)
+
+        if scenario_name != "Live / Real-time":
+            # What-if scenarios are counterfactual stress tests. Even if the live
+            # Northern Powergrid API has no active outage at this moment, the
+            # selected hazard should impose plausible outage and customer-impact
+            # pressure so regional risk, ENS, failure probability and losses rise.
+            nearby = max(nearby, int(stress_profile["min_outages"]))
+            affected_customers = max(affected_customers, float(stress_profile["min_customers"]))
+
         if scenario_name == "Total blackout stress":
-            nearby = max(nearby, 10)
-            affected_customers = max(affected_customers, 3000)
+            nearby = max(nearby, 12)
+            affected_customers = max(affected_customers, 4200)
 
         # =========================
         # SOCIO-ECONOMIC
@@ -3270,6 +3331,12 @@ def build_places(region: str, scenario_name: str, mc_runs: int) -> Tuple[pd.Data
                 - total_storage * 0.35
             )
 
+        if scenario_name != "Live / Real-time":
+            ens_mw = max(
+                ens_mw,
+                row["estimated_load_mw"] * stress_profile["ens_load_factor"],
+            )
+
         ens_mw = max(ens_mw, 0)
 
         # =========================
@@ -3300,11 +3367,32 @@ def build_places(region: str, scenario_name: str, mc_runs: int) -> Tuple[pd.Data
             100,
         )
 
+        if scenario_name != "Live / Real-time":
+            scenario_hazard = compute_compound_hazard_proxy(row)
+            final_risk = clamp(
+                max(final_risk, stress_profile["risk_floor"])
+                + stress_profile["risk_boost"] * clamp(scenario_hazard / 100, 0, 1),
+                0,
+                100,
+            )
+            base["failure_probability"] = round(
+                max(
+                    safe_float(base.get("failure_probability")),
+                    stress_profile["failure_floor"],
+                    1 / (1 + math.exp(-0.10 * (final_risk - 62))),
+                ),
+                3,
+            )
+            cascade = cascade_breakdown(base["failure_probability"])
+
         renewable_fail = renewable_failure_probability(row)
         grid_fail = grid_failure_probability(final_risk, nearby, ens_mw)
 
+        if scenario_name != "Live / Real-time":
+            grid_fail = clamp(max(grid_fail, stress_profile["grid_floor"]), 0, 0.95)
+
         if scenario_name == "Drought":
-            grid_fail = clamp(grid_fail + (net_load / 1000) * 0.25, 0, 1)
+            grid_fail = clamp(max(grid_fail, stress_profile["grid_floor"]) + (net_load / 1000) * 0.25, 0, 1)
 
         if calm_live_weather:
             final_risk = min(final_risk, 36.0)
@@ -3343,6 +3431,9 @@ def build_places(region: str, scenario_name: str, mc_runs: int) -> Tuple[pd.Data
                 0,
                 100,
             )
+
+        if scenario_name != "Live / Real-time":
+            resilience = clamp(resilience - stress_profile["resilience_penalty"], 5, 100)
 
         if calm_live_weather:
             resilience = max(resilience, 68.0)
@@ -5015,10 +5106,166 @@ def bbc_tab(region: str, scenario: str, places: pd.DataFrame, grid: pd.DataFrame
     render_bbc_weather_component(region, places, grid, scenario, height=790)
 
 
+
+
+
+def regional_risk_palette(score: float) -> str:
+    """Bright categorical palette for the regional partition map."""
+    score = safe_float(score)
+    if score >= 85:
+        return "#d80073"   # magenta / severe
+    if score >= 65:
+        return "#ff9700"   # orange / high
+    if score >= 40:
+        return "#0070c0"   # blue / moderate
+    return "#7bd000"       # green / low
+
+
+def make_place_cell_geojson(places: pd.DataFrame, region: str) -> Dict[str, Any]:
+    """
+    Build a lightweight colourful regional polygon map without geopandas.
+
+    The screenshot provided by the user shows a categorical political-style map.
+    For North East and Yorkshire, this function creates contiguous analytical
+    cells around the configured city/postcode anchors, clipped to the region
+    bounding box. It is not an official administrative boundary dataset; it is a
+    visual intelligence layer designed to make regional risk patterns immediately
+    readable inside Streamlit.
+    """
+    bbox = REGIONS[region]["bbox"]
+    min_lon, min_lat, max_lon, max_lat = bbox
+    df = places.copy().reset_index(drop=True)
+    features = []
+
+    for i, row in df.iterrows():
+        lat = safe_float(row.get("lat"))
+        lon = safe_float(row.get("lon"))
+        risk = safe_float(row.get("final_risk_score"))
+        res = safe_float(row.get("resilience_index"))
+        ens = safe_float(row.get("energy_not_supplied_mw"))
+        fail = safe_float(row.get("failure_probability"))
+
+        # Cell sizes are tuned separately because Yorkshire is wider than the
+        # North East. The small deterministic offsets reduce overlap and give a
+        # more map-like mosaic rather than identical boxes.
+        if region == "Yorkshire":
+            dx = 0.34 + 0.035 * (i % 3)
+            dy = 0.22 + 0.025 * ((i + 1) % 3)
+        else:
+            dx = 0.27 + 0.030 * (i % 3)
+            dy = 0.20 + 0.020 * ((i + 2) % 3)
+
+        west = clamp(lon - dx, min_lon, max_lon)
+        east = clamp(lon + dx, min_lon, max_lon)
+        south = clamp(lat - dy, min_lat, max_lat)
+        north = clamp(lat + dy, min_lat, max_lat)
+
+        coordinates = [[
+            [west, south], [east, south], [east, north], [west, north], [west, south]
+        ]]
+
+        features.append({
+            "type": "Feature",
+            "geometry": {"type": "Polygon", "coordinates": coordinates},
+            "properties": {
+                "place": str(row.get("place", "Unknown")),
+                "postcode": str(row.get("postcode_prefix", "")),
+                "risk": round(risk, 2),
+                "risk_label": risk_label(risk),
+                "resilience": round(res, 2),
+                "failure_probability": round(fail * 100, 1),
+                "ens": round(ens, 2),
+                "colour": regional_risk_palette(risk),
+            },
+        })
+
+    return {"type": "FeatureCollection", "features": features}
+
+
+def render_colourful_regional_map(region: str, places: pd.DataFrame) -> None:
+    """Render the colourful North East/Yorkshire regional intelligence map."""
+    center = REGIONS[region]["center"]
+    geojson = make_place_cell_geojson(places, region)
+
+    fig = go.Figure()
+
+    for feature in geojson["features"]:
+        props = feature["properties"]
+        coords = feature["geometry"]["coordinates"][0]
+        lons = [p[0] for p in coords]
+        lats = [p[1] for p in coords]
+        hover = (
+            f"<b>{props['place']}</b><br>"
+            f"Postcode: {props['postcode']}<br>"
+            f"Risk: {props['risk']}/100 ({props['risk_label']})<br>"
+            f"Resilience: {props['resilience']}/100<br>"
+            f"Failure probability: {props['failure_probability']}%<br>"
+            f"ENS: {props['ens']} MW"
+        )
+        fig.add_trace(go.Scattermapbox(
+            lon=lons,
+            lat=lats,
+            mode="lines",
+            fill="toself",
+            fillcolor=props["colour"],
+            line=dict(width=2, color="white"),
+            opacity=0.82,
+            text=[hover] * len(lons),
+            hoverinfo="text",
+            name=f"{props['place']} · {props['risk_label']}",
+            showlegend=False,
+        ))
+
+    # Add labelled centre points.
+    fig.add_trace(go.Scattermapbox(
+        lon=places["lon"],
+        lat=places["lat"],
+        mode="markers+text",
+        marker=dict(size=13, color="white"),
+        text=places["place"],
+        textposition="top center",
+        hoverinfo="skip",
+        showlegend=False,
+    ))
+
+    fig.update_layout(
+        mapbox=dict(
+            style="carto-positron",
+            center={"lat": center["lat"], "lon": center["lon"]},
+            zoom=center["zoom"],
+        ),
+        height=560,
+        margin=dict(l=10, r=10, t=40, b=10),
+        title=f"Colourful regional risk mosaic — {region}",
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown(
+        """
+        <div class="note">
+        <b>Colourful map interpretation:</b><br>
+        <span style="color:#7bd000;font-weight:800;">Green</span> = low operational risk,
+        <span style="color:#0070c0;font-weight:800;">blue</span> = moderate watch condition,
+        <span style="color:#ff9700;font-weight:800;">orange</span> = high hazard stress,
+        <span style="color:#d80073;font-weight:800;">magenta</span> = severe what-if stress.
+        This layer is an analytical regional mosaic for North East/Yorkshire, not a legal boundary map.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 def spatial_tab(region: str, places: pd.DataFrame, outages: pd.DataFrame, pc: pd.DataFrame, grid: pd.DataFrame, map_mode: str) -> None:
     st.subheader("Satellite + infrastructure + grid-risk intelligence")
 
     center = REGIONS[region]["center"]
+
+    # =========================
+    # COLOURFUL REGIONAL MOSAIC MAP
+    # =========================
+    st.markdown("### 🗺️ Colourful regional risk mosaic")
+    render_colourful_regional_map(region, places)
+    st.markdown("---")
 
     # =========================
     # 🔥 1. PYDECK (MAIN ENGINE)
@@ -5525,7 +5772,7 @@ def render_finance_funding_tab(places: pd.DataFrame, pc: pd.DataFrame) -> None:
 
 def render_readme_tab() -> None:
     st.subheader("README — model, data, formulae and interpretation")
-    st.markdown('\n<div class="card">\n<h2 style="color:white;margin-top:0;">SAT-Guard Digital Twin — README</h2>\n<p style="color:#cbd5e1;line-height:1.65;">\nThis Streamlit app is a transparent research prototype for regional electricity-grid resilience assessment. It combines live or fallback weather, public outage information, social vulnerability, energy-not-supplied, financial impact, failure probability, investment prioritisation and Monte Carlo uncertainty. It is written for users who may not have a background in power systems, statistics or socio-economic vulnerability analysis.\n</p>\n</div>\n\n### 1. Data sources used in the app\n\n**Weather and air quality.** The app calls Open-Meteo weather and air-quality endpoints when available. If an API call fails, safe fallback values are generated so the dashboard still runs. Weather variables include wind speed, precipitation, temperature, humidity, cloud cover, solar radiation and air-quality indicators.\n\n**Northern Powergrid outage data.** The app attempts to read public outage records from Northern Powergrid. If no geocoded outage record is available, the app may create synthetic map points for visual continuity. These points are now marked as synthetic and are not allowed to create live-mode warnings, failure escalation or fragile labels.\n\n**IoD/IMD socio-economic evidence.** IoD means Indices of Deprivation. IMD means Index of Multiple Deprivation. These datasets summarise relative deprivation across small areas using domains such as income, employment, education, health, crime, housing/services and living environment. In this app, values are converted onto a 0–100 scale, where a higher value means higher social vulnerability. If detailed IoD2025 files are not available, the app uses a transparent fallback based on local vulnerability proxies and population density.\n\n### 2. Live-mode warning correction\n\nA previous version could show warning, severe or fragile states in North East and Yorkshire even when observed weather was good. The main cause was that fallback outage markers and a fixed baseline ENS term could behave like real outage evidence. This version fixes that by separating synthetic outage points from real outage records, ignoring synthetic outages in live-mode scoring, setting live ENS to zero when no real outage and no affected customers are present, capping live risk under calm weather, and preventing calm live conditions from being labelled fragile unless real evidence exists.\n\n### 3. Main tabs\n\n**Executive overview** shows the regional intelligence table, risk/resilience gauges, location ranking and social-vulnerability relationship. **Simulation** provides an animated operational weather view. **Natural hazards** compares postcode resilience across wind, flood, drought, heat/air-quality stress and compound hazard. **IoD2025 socio-economic evidence** explains deprivation data matching. **Spatial intelligence** shows map-based risk, infrastructure and outage overlays with legends. **Resilience** shows resilience rankings. **Failure & investment** combines failure probability and investment actions. **Scenario losses** compares what-if stress scenarios. **Finance & funding** combines loss modelling and funding prioritisation. **Monte Carlo** keeps only the improved simulation model under the simple name Monte Carlo. **Validation / black-box** documents transparency checks. **README** explains the model. **Data / Export** exposes output tables.\n\n### 4. Core formulae\n\n**Weather risk component**\n\n`weather_score = 27×clip(wind/45) + 18×clip(rain/6) + 7×clip(cloud/100) + 8×clip(|temperature−18|/20) + 4×clip(humidity/100)`\n\n**Pollution and public-health stress**\n\n`pollution_score = 17×clip(AQI/100) + 9×clip(PM2.5/60)`\n\n**Renewable generation proxy**\n\n`solar_MW = shortwave_radiation × 0.18`\n\n`wind_MW = min((wind_speed/12)^3, 1.20) × 95`\n\nThe wind term follows the cubic character of wind-power availability before rated output. It is a simplified proxy, not a turbine-specific engineering model.\n\n**Energy Not Supplied (ENS)**\n\n`ENS_MW = (100×outage_count + 0.014×affected_customers + base_load_component) × scenario_outage_multiplier`\n\nIn live mode, when there are no real outages and no affected customers, the base load component is zero. This prevents normal demand from being misclassified as unserved energy.\n\n**Failure probability**\n\n`failure_probability = 1 / (1 + exp(-0.065 × (risk_score − 60)))`\n\nThis logistic function converts risk into a probability-like value. Scores near 60 sit near the transition zone; low risk remains low probability, while high risk rises non-linearly.\n\n**Cascade stress**\n\n`water = power^1.35 × 0.74`\n\n`telecom = power^1.22 × 0.82`\n\n`transport = ((power + telecom)/2) × 0.70`\n\n`social = ((power + water + telecom)/3) × 0.75`\n\n**Resilience index**\n\n`resilience = 100 − (0.42×risk + 0.20×social_vulnerability + 17×grid_failure + 10×renewable_failure + 12×system_stress + finance_penalty)`\n\nA high score means the place is more robust. A low score means the area is stressed or fragile. The finance penalty is capped so one very large value does not dominate all other factors.\n\n**Social vulnerability**\n\n`social_vulnerability = 40×clip(population_density/4500) + 60×clip(IMD_score/100)`\n\nWhen IoD domain data are available, the app blends domain vulnerability with this fallback score. The aim is to represent that a technically similar outage may have a larger human impact in a more deprived or densely populated area.\n\n**Financial loss**\n\n`total_loss = VoLL_loss + customer_interruption_loss + business_disruption_loss + restoration_loss + critical_services_loss`\n\n`VoLL_loss = ENS_MWh × £17,000/MWh`\n\n`customer_interruption_loss = affected_customers × £38`\n\n`business_disruption_loss = ENS_MWh × £1,100 × business_density`\n\n`restoration_loss = outage_count × £18,500`\n\n`critical_services_loss = ENS_MWh × £320 × social_vulnerability_fraction`\n\nThese figures are scenario assumptions and should be calibrated with local regulatory or utility data before operational use.\n\n**Investment recommendation score**\n\n`recommendation = 0.30×risk + 0.22×social_vulnerability + 0.18×(100−resilience) + 0.13×loss_percentile + 0.10×ENS_percentile + 0.07×outage_pressure`\n\n**Funding priority score**\n\n`funding = 0.26×risk + 0.20×(100−resilience) + 0.18×social_vulnerability + 0.15×loss_exposure + 0.11×ENS_exposure + 0.06×outage_exposure + 0.04×recommendation`\n\n**Monte Carlo model**\n\nThe Monte Carlo model uses a shared storm shock so wind, rain, outage count and ENS move together. It also uses triangular demand uncertainty and lognormal restoration-cost tails. Outputs include mean risk, P95 risk, mean failure probability, P95 failure probability, mean loss, P95 loss and CVaR95 loss.\n\n### 5. Colour legend\n\nGreen means low risk or robust resilience. Yellow means moderate watch-level stress. Orange means high warning-level stress. Red means severe risk or fragile resilience. The dashboard displays legends near regional risk visuals so users can understand what the colours mean.\n\n### 6. Important limitations\n\nThis is a research-grade prototype, not an official operational control system. Weather APIs, outage APIs and socio-economic files may be incomplete or unavailable. All scoring weights are transparent assumptions and should be calibrated with historical outage, asset, feeder, substation, customer-minute-lost and restoration-cost data before production use.\n\n### 7. References for the modelling logic\n\n[1] Ofgem RIIO electricity-distribution resilience and interruption reporting frameworks.  \n[2] UK Department for Energy Security and Net Zero value-of-lost-load and electricity-security appraisal evidence.  \n[3] English Indices of Deprivation technical reports for IMD/IoD domain interpretation.  \n[4] Open-Meteo weather and air-quality API documentation for meteorological variables.  \n[5] Northern Powergrid open-data documentation for live power-cut records.  \n[6] Billinton and Allan, *Reliability Evaluation of Power Systems*, for reliability and interruption-impact modelling.  \n[7] Panteli and Mancarella resilience literature for weather-driven power-system resilience concepts.  \n[8] Lund and Kempton vehicle-to-grid literature for EV/V2G support concepts.  \n[9] IEC/IEEE power-system dependability and resilience guidance.\n', unsafe_allow_html=True)
+    st.markdown('\n<div class="card">\n<h2 style="color:white;margin-top:0;">SAT-Guard Digital Twin — README</h2>\n<p style="color:#cbd5e1;line-height:1.65;">\nThis Streamlit app is a transparent research prototype for regional electricity-grid resilience assessment. It combines live or fallback weather, public outage information, social vulnerability, energy-not-supplied, financial impact, failure probability, investment prioritisation and Monte Carlo uncertainty. It is written for users who may not have a background in power systems, statistics or socio-economic vulnerability analysis.\n</p>\n</div>\n\n### 1. Data sources used in the app\n\n**Weather and air quality.** The app calls Open-Meteo weather and air-quality endpoints when available. If an API call fails, safe fallback values are generated so the dashboard still runs. Weather variables include wind speed, precipitation, temperature, humidity, cloud cover, solar radiation and air-quality indicators.\n\n**Northern Powergrid outage data.** The app attempts to read public outage records from Northern Powergrid. If no geocoded outage record is available, the app may create synthetic map points for visual continuity. These points are now marked as synthetic and are not allowed to create live-mode warnings, failure escalation or fragile labels.\n\n**IoD/IMD socio-economic evidence.** IoD means Indices of Deprivation. IMD means Index of Multiple Deprivation. These datasets summarise relative deprivation across small areas using domains such as income, employment, education, health, crime, housing/services and living environment. In this app, values are converted onto a 0–100 scale, where a higher value means higher social vulnerability. If detailed IoD2025 files are not available, the app uses a transparent fallback based on local vulnerability proxies and population density.\n\n### 2. Live-mode warning correction\n\nA previous version could show warning, severe or fragile states in North East and Yorkshire even when observed weather was good. The main cause was that fallback outage markers and a fixed baseline ENS term could behave like real outage evidence. This version fixes that by separating synthetic outage points from real outage records, ignoring synthetic outages in live-mode scoring, setting live ENS to zero when no real outage and no affected customers are present, capping live risk under calm weather, and preventing calm live conditions from being labelled fragile unless real evidence exists.\n\n### 3. Main tabs\n\n**Executive overview** shows the regional intelligence table, risk/resilience gauges, location ranking and social-vulnerability relationship. **Simulation** provides an animated operational weather view. **Natural hazards** compares postcode resilience across wind, flood, drought, heat/air-quality stress and compound hazard. **IoD2025 socio-economic evidence** explains deprivation data matching. **Spatial intelligence** shows a colourful North East/Yorkshire regional risk mosaic, map-based risk, infrastructure and outage overlays with legends. **Resilience** shows resilience rankings. **Failure & investment** combines failure probability and investment actions. **Scenario losses** compares what-if stress scenarios. **Finance & funding** combines loss modelling and funding prioritisation. **Monte Carlo** keeps only the improved simulation model under the simple name Monte Carlo. **Validation / black-box** documents transparency checks. **README** explains the model. **Data / Export** exposes output tables.\n\n### 4. Core formulae\n\n**Weather risk component**\n\n`weather_score = 27×clip(wind/45) + 18×clip(rain/6) + 7×clip(cloud/100) + 8×clip(|temperature−18|/20) + 4×clip(humidity/100)`\n\n**Pollution and public-health stress**\n\n`pollution_score = 17×clip(AQI/100) + 9×clip(PM2.5/60)`\n\n**Renewable generation proxy**\n\n`solar_MW = shortwave_radiation × 0.18`\n\n`wind_MW = min((wind_speed/12)^3, 1.20) × 95`\n\nThe wind term follows the cubic character of wind-power availability before rated output. It is a simplified proxy, not a turbine-specific engineering model.\n\n**Energy Not Supplied (ENS)**\n\n`ENS_MW = (100×outage_count + 0.014×affected_customers + base_load_component) × scenario_outage_multiplier`\n\nIn live mode, when there are no real outages and no affected customers, the base load component is zero. This prevents normal demand from being misclassified as unserved energy.\n\n**Failure probability**\n\n`failure_probability = 1 / (1 + exp(-0.065 × (risk_score − 60)))`\n\nThis logistic function converts risk into a probability-like value. Scores near 60 sit near the transition zone; low risk remains low probability, while high risk rises non-linearly.\n\n**Cascade stress**\n\n`water = power^1.35 × 0.74`\n\n`telecom = power^1.22 × 0.82`\n\n`transport = ((power + telecom)/2) × 0.70`\n\n`social = ((power + water + telecom)/3) × 0.75`\n\n**Resilience index**\n\n`resilience = 100 − (0.42×risk + 0.20×social_vulnerability + 17×grid_failure + 10×renewable_failure + 12×system_stress + finance_penalty)`\n\nA high score means the place is more robust. A low score means the area is stressed or fragile. The finance penalty is capped so one very large value does not dominate all other factors.\n\n**Social vulnerability**\n\n`social_vulnerability = 40×clip(population_density/4500) + 60×clip(IMD_score/100)`\n\nWhen IoD domain data are available, the app blends domain vulnerability with this fallback score. The aim is to represent that a technically similar outage may have a larger human impact in a more deprived or densely populated area.\n\n**Financial loss**\n\n`total_loss = VoLL_loss + customer_interruption_loss + business_disruption_loss + restoration_loss + critical_services_loss`\n\n`VoLL_loss = ENS_MWh × £17,000/MWh`\n\n`customer_interruption_loss = affected_customers × £38`\n\n`business_disruption_loss = ENS_MWh × £1,100 × business_density`\n\n`restoration_loss = outage_count × £18,500`\n\n`critical_services_loss = ENS_MWh × £320 × social_vulnerability_fraction`\n\nThese figures are scenario assumptions and should be calibrated with local regulatory or utility data before operational use.\n\n**Investment recommendation score**\n\n`recommendation = 0.30×risk + 0.22×social_vulnerability + 0.18×(100−resilience) + 0.13×loss_percentile + 0.10×ENS_percentile + 0.07×outage_pressure`\n\n**Funding priority score**\n\n`funding = 0.26×risk + 0.20×(100−resilience) + 0.18×social_vulnerability + 0.15×loss_exposure + 0.11×ENS_exposure + 0.06×outage_exposure + 0.04×recommendation`\n\n**Monte Carlo model**\n\nThe Monte Carlo model uses a shared storm shock so wind, rain, outage count and ENS move together. It also uses triangular demand uncertainty and lognormal restoration-cost tails. Outputs include mean risk, P95 risk, mean failure probability, P95 failure probability, mean loss, P95 loss and CVaR95 loss.\n\n### 5. Colour legend\n\nGreen means low risk or robust resilience. Yellow means moderate watch-level stress. Orange means high warning-level stress. Red means severe risk or fragile resilience. The dashboard displays legends near regional risk visuals so users can understand what the colours mean.\n\n### 6. Important limitations\n\nThis is a research-grade prototype, not an official operational control system. Weather APIs, outage APIs and socio-economic files may be incomplete or unavailable. All scoring weights are transparent assumptions and should be calibrated with historical outage, asset, feeder, substation, customer-minute-lost and restoration-cost data before production use.\n\n### 7. References for the modelling logic\n\n[1] Ofgem RIIO electricity-distribution resilience and interruption reporting frameworks.  \n[2] UK Department for Energy Security and Net Zero value-of-lost-load and electricity-security appraisal evidence.  \n[3] English Indices of Deprivation technical reports for IMD/IoD domain interpretation.  \n[4] Open-Meteo weather and air-quality API documentation for meteorological variables.  \n[5] Northern Powergrid open-data documentation for live power-cut records.  \n[6] Billinton and Allan, *Reliability Evaluation of Power Systems*, for reliability and interruption-impact modelling.  \n[7] Panteli and Mancarella resilience literature for weather-driven power-system resilience concepts.  \n[8] Lund and Kempton vehicle-to-grid literature for EV/V2G support concepts.  \n[9] IEC/IEEE power-system dependability and resilience guidance.\n', unsafe_allow_html=True)
 
 def main() -> None:
     st.markdown(APP_CSS, unsafe_allow_html=True)
