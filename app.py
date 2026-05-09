@@ -229,16 +229,39 @@ def hazard_resilience_score(
     finance_n = clamp(finance / 20_000_000, 0, 1)
 
     risk_n = clamp(risk / 100, 0, 1)
+    
+    # =========================================================
+    # UK WINTER GRID FACTOR
+    # =========================================================
 
-    # =========================================================
-    # CALM WEATHER DETECTION
-    # =========================================================
+    winter_factor = 0
+    
+    month = datetime.utcnow().month
+
+    if month in [11, 12, 1, 2]:
+        
+        winter_factor += 0.12
+        
+        # wet-cold overhead exposure
+
+        if rain > 1.2 and wind > 14:
+            
+            winter_factor += 0.18
+
+            # freezing infrastructure stress
+
+        if safe_float(row.get("temperature_2m")) < 2:
+
+            winter_factor += 0.10
+            # =========================================================
+            # CALM WEATHER DETECTION
+            # =========================================================
 
     calm_weather = (
-        wind < 20
-        and rain < 3
-        and aqi < 60
-        and outage < 2
+        wind < 12
+        and rain < 0.8
+        and aqi < 45
+        and outage < 1
     )
 
     # =========================================================
@@ -608,9 +631,9 @@ def enhanced_failure_probability(
 
     hazard_n = clamp(hazard_stress / 100, 0, 1)
 
-    wind_n = clamp(wind / 90, 0, 1)
+    wind_n = clamp(wind / 42, 0, 1)
 
-    rain_n = clamp(rain / 40, 0, 1)
+    rain_n = clamp(rain / 10, 0, 1)
 
     aqi_n = clamp(aqi / 150, 0, 1)
 
@@ -633,10 +656,20 @@ def enhanced_failure_probability(
     # DYNAMIC HAZARD WEIGHTING
     # =========================================================
 
-    if calm_weather:
-        weather_multiplier = 0.42
-    else:
-        weather_multiplier = 1.0
+    weather_severity = (
+
+        0.42 * clamp(wind / 45, 0, 1)
+        + 0.33 * clamp(rain / 12, 0, 1)
+        + 0.15 * clamp(aqi / 90, 0, 1)
+        + 0.10 * clamp(outage / 5, 0, 1)
+
+    )
+
+    weather_multiplier = clamp(
+        0.35 + weather_severity,
+        0.35,
+        1.75
+    )
 
     # =========================================================
     # CALIBRATED LOGISTIC MODEL
@@ -672,7 +705,7 @@ def enhanced_failure_probability(
         )
 
         # overall system stress
-        + 0.25 * risk_n
+        + 0.42 * risk_n
     )
 
     # =========================================================
