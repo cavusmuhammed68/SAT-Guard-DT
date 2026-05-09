@@ -5448,609 +5448,406 @@ def spatial_tab(
     grid: pd.DataFrame,
     map_mode: str
 ) -> None:
-
     """
-    Ultra-advanced postcode-scale GIS intelligence engine.
+    Postcode-scale Spatial Intelligence view.
 
-    IMPROVEMENTS
-    --------------------------------------------------------
-    • NO overlapping polygons
-    • postcode tessellation system
-    • smooth micro-regional zoning
-    • full North East / Yorkshire coverage
-    • proper coloured postcode districts
-    • deterministic polygon generation
-    • realistic spatial continuity
-    • publication-grade GIS rendering
+    This version replaces the previous black-outline polygon view with a
+    postcode-risk colour surface similar to a professional GIS thematic map:
+    - no thick black administrative outlines;
+    - no isolated green dots as the main evidence layer;
+    - risk is coloured continuously across the regional footprint;
+    - every grid cell receives its colour from nearby postcode/place risk;
+    - infrastructure and outage evidence are overlaid as small symbols only.
     """
 
     import math
     import numpy as np
+    import pandas as pd
     import plotly.graph_objects as go
     import plotly.express as px
 
-    st.subheader("🌍 Postcode-scale spatial intelligence")
+    st.subheader("🛰️ Spatial intelligence — postcode risk surface")
 
-    # =====================================================
-    # REGION CONFIG
-    # =====================================================
-
-    center = REGIONS[region]["center"]
-
-    # =====================================================
-    # SAFE DATA
-    # =====================================================
+    region_cfg = REGIONS[region]
+    center = region_cfg["center"]
+    min_lon, min_lat, max_lon, max_lat = region_cfg["bbox"]
 
     df = places.copy()
-
-    numeric_cols = [
-        "lat",
-        "lon",
-        "final_risk_score",
-        "resilience_index",
-        "social_vulnerability",
-        "energy_not_supplied_mw",
-        "grid_failure_probability",
+    required = [
+        "lat", "lon", "final_risk_score", "resilience_index",
+        "grid_failure_probability", "energy_not_supplied_mw",
+        "social_vulnerability"
     ]
+    for col in required:
+        if col not in df.columns:
+            df[col] = 0
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
-    for c in numeric_cols:
+    if "postcode_prefix" not in df.columns:
+        df["postcode_prefix"] = df.get("place", "postcode")
 
-        df[c] = pd.to_numeric(
-            df.get(c),
-            errors="coerce"
-        ).fillna(0)
+    if "place" not in df.columns:
+        df["place"] = df["postcode_prefix"].astype(str)
 
-    # =====================================================
-    # EMBEDDED GEOJSON
-    # =====================================================
-
+    # -----------------------------------------------------
+    # Region footprint. We use the embedded coarse authority
+    # polygons only as a mask, not as visual outlines. This
+    # avoids the previous ugly black boundary problem.
+    # -----------------------------------------------------
     if region == "North East":
-
-        geojson_data = NORTHEAST_GEOJSON
-
-        lat_step = 0.065
-        lon_step = 0.095
-
+        footprint_geojson = NORTHEAST_GEOJSON
     elif region == "Yorkshire":
-
-        geojson_data = YORKSHIRE_GEOJSON
-
-        lat_step = 0.060
-        lon_step = 0.090
-
+        footprint_geojson = YORKSHIRE_GEOJSON
     else:
+        footprint_geojson = None
 
-        st.warning(
-            "Advanced GIS available only for North East and Yorkshire."
-        )
+    def _point_in_ring(lon: float, lat: float, ring: list) -> bool:
+        inside = False
+        j = len(ring) - 1
+        for i in range(len(ring)):
+            xi, yi = ring[i]
+            xj, yj = ring[j]
+            intersects = ((yi > lat) != (yj > lat)) and (
+                lon < (xj - xi) * (lat - yi) / ((yj - yi) + 1e-12) + xi
+            )
+            if intersects:
+                inside = not inside
+            j = i
+        return inside
 
-        return
+    def _inside_footprint(lon: float, lat: float) -> bool:
+        if footprint_geojson is None:
+            return True
+        for feat in footprint_geojson.get("features", []):
+            geom = feat.get("geometry", {})
+            if geom.get("type") == "Polygon":
+                rings = geom.get("coordinates", [])
+                if rings and _point_in_ring(lon, lat, rings[0]):
+                    return True
+            elif geom.get("type") == "MultiPolygon":
+                for poly in geom.get("coordinates", []):
+                    if poly and _point_in_ring(lon, lat, poly[0]):
+                        return True
+        return False
 
-    # =====================================================
-    # PROFESSIONAL COLOUR SCALE
-    # =====================================================
+    def _risk_to_colour(score: float) -> str:
+        score = clamp(score, 0, 100)
+        if score >= 85:
+            return "#5b0017"   # deep severe
+        if score >= 70:
+            return "#d7191c"   # red
+        if score >= 55:
+            return "#fdae21"   # orange
+        if score >= 40:
+            return "#ffd92f"   # yellow
+        if score >= 25:
+            return "#2ca25f"   # green
+        return "#1f78b4"       # blue
 
-    def risk_colour(score):
+    def _idw_risk(lon: float, lat: float) -> tuple[float, str, str]:
+        """Inverse-distance weighted postcode risk at a cell centroid."""
+        pts = df[["lon", "lat", "final_risk_score", "postcode_prefix", "place"]].copy()
+        dx = (pts["lon"].to_numpy(dtype=float) - lon) * math.cos(math.radians(lat))
+        dy = pts["lat"].to_numpy(dtype=float) - lat
+        dist2 = dx * dx + dy * dy
+        nearest_idx = int(np.argmin(dist2))
+        weights = 1.0 / np.maximum(dist2, 1e-6)
+        risk = float(np.sum(weights * pts["final_risk_score"].to_numpy(dtype=float)) / np.sum(weights))
+        return risk, str(pts.iloc[nearest_idx]["postcode_prefix"]), str(pts.iloc[nearest_idx]["place"])
 
-        if score >= 80:
-            return "#ff0054"
+    def _cell_polygon(lon: float, lat: float, dx: float, dy: float):
+        return [[
+            [lon - dx / 2, lat - dy / 2],
+            [lon + dx / 2, lat - dy / 2],
+            [lon + dx / 2, lat + dy / 2],
+            [lon - dx / 2, lat + dy / 2],
+            [lon - dx / 2, lat - dy / 2],
+        ]]
 
-        elif score >= 65:
-            return "#ff7b00"
+    # -----------------------------------------------------
+    # Dense postcode surface. Higher resolution gives the
+    # screenshot-like coloured map without chunky boundaries.
+    # -----------------------------------------------------
+    lon_step = 0.035 if region == "North East" else 0.040
+    lat_step = 0.027 if region == "North East" else 0.030
 
-        elif score >= 50:
-            return "#ffbe0b"
+    features = []
+    rows = []
+    cell_id = 0
+    lon_values = np.arange(min_lon, max_lon + lon_step, lon_step)
+    lat_values = np.arange(min_lat, max_lat + lat_step, lat_step)
 
-        elif score >= 35:
-            return "#00b4ff"
+    for lat in lat_values:
+        for lon in lon_values:
+            if not _inside_footprint(float(lon), float(lat)):
+                continue
+            risk, postcode, place = _idw_risk(float(lon), float(lat))
+            colour = _risk_to_colour(risk)
+            fid = f"cell_{cell_id}"
+            features.append({
+                "type": "Feature",
+                "id": fid,
+                "properties": {
+                    "id": fid,
+                    "risk": round(risk, 2),
+                    "postcode": postcode,
+                    "nearest_place": place,
+                    "colour": colour,
+                },
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": _cell_polygon(float(lon), float(lat), lon_step * 0.98, lat_step * 0.98),
+                },
+            })
+            rows.append({
+                "id": fid,
+                "risk": round(risk, 2),
+                "postcode": postcode,
+                "nearest_place": place,
+                "colour": colour,
+            })
+            cell_id += 1
 
-        else:
-            return "#70e000"
+    surface_geojson = {"type": "FeatureCollection", "features": features}
+    surface_df = pd.DataFrame(rows)
 
-    # =====================================================
-    # HEADER
-    # =====================================================
+    # -----------------------------------------------------
+    # KPI strip
+    # -----------------------------------------------------
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Average postcode risk", f"{df['final_risk_score'].mean():.1f}/100")
+    c2.metric("Maximum postcode risk", f"{df['final_risk_score'].max():.1f}/100")
+    c3.metric("High-risk surface cells", int((surface_df["risk"] >= 65).sum()) if not surface_df.empty else 0)
+    c4.metric("Mapped cells", len(surface_df))
 
-    st.markdown(
-        f"""
-        <div style="
-            background:linear-gradient(
-                90deg,
-                #020617,
-                #0f172a,
-                #111827
-            );
-            padding:22px;
-            border-radius:18px;
-            margin-bottom:22px;
-            border:1px solid rgba(255,255,255,0.08);
-        ">
-
-        <h2 style="
-            margin:0;
-            color:white;
-            font-size:34px;
-        ">
-        🛰️ {region} postcode intelligence engine
-        </h2>
-
-        <div style="
-            color:#cbd5e1;
-            margin-top:10px;
-            font-size:15px;
-        ">
-        Micro-spatial infrastructure intelligence,
-        postcode-scale resilience zoning,
-        operational risk propagation and
-        digital-twin GIS analytics.
-        </div>
-
-        </div>
-        """,
-
-        unsafe_allow_html=True,
-    )
-
-    # =====================================================
-    # MAIN FIGURE
-    # =====================================================
-
+    # -----------------------------------------------------
+    # Main GIS figure
+    # -----------------------------------------------------
     fig = go.Figure()
 
-    fig.update_layout(
+    if not surface_df.empty:
+        fig.add_trace(
+            go.Choroplethmapbox(
+                geojson=surface_geojson,
+                locations=surface_df["id"],
+                z=surface_df["risk"],
+                featureidkey="properties.id",
+                colorscale=[
+                    [0.00, "#1f78b4"],
+                    [0.25, "#2ca25f"],
+                    [0.40, "#ffd92f"],
+                    [0.55, "#fdae21"],
+                    [0.75, "#d7191c"],
+                    [1.00, "#5b0017"],
+                ],
+                zmin=0,
+                zmax=100,
+                marker_opacity=0.78,
+                marker_line_width=0,
+                hovertemplate=(
+                    "<b>%{customdata[0]}</b><br>"
+                    "Nearest place: %{customdata[1]}<br>"
+                    "Risk score: %{z:.1f}/100"
+                    "<extra></extra>"
+                ),
+                customdata=surface_df[["postcode", "nearest_place"]].values,
+                name="Postcode risk surface",
+                showscale=False,
+            )
+        )
 
-        mapbox_style="carto-positron",
-
-        mapbox_zoom=center["zoom"] - 0.1,
-
-        mapbox_center={
-            "lat": center["lat"],
-            "lon": center["lon"],
-        },
-
-        height=900,
-
-        margin=dict(
-            l=10,
-            r=10,
-            t=10,
-            b=10
-        ),
-
-        paper_bgcolor="#020617",
-
-        plot_bgcolor="#020617",
-
-        font=dict(color="white"),
+    # postcode/place points: visible but not dominating the map
+    fig.add_trace(
+        go.Scattermapbox(
+            lat=df["lat"],
+            lon=df["lon"],
+            mode="markers+text",
+            text=df["postcode_prefix"].astype(str),
+            textposition="top center",
+            marker=dict(
+                size=np.clip(df["final_risk_score"] / 4.5 + 8, 10, 30),
+                color=df["final_risk_score"],
+                cmin=0,
+                cmax=100,
+                colorscale=[
+                    [0.00, "#1f78b4"],
+                    [0.25, "#2ca25f"],
+                    [0.40, "#ffd92f"],
+                    [0.55, "#fdae21"],
+                    [0.75, "#d7191c"],
+                    [1.00, "#5b0017"],
+                ],
+                opacity=0.95,
+                colorbar=dict(
+                    title="Risk",
+                    x=0.98,
+                    y=0.55,
+                    len=0.55,
+                ),
+            ),
+            textfont=dict(color="white", size=12),
+            customdata=np.stack([
+                df["place"].astype(str),
+                df["final_risk_score"].round(1),
+                df["grid_failure_probability"].mul(100).round(1),
+                df["resilience_index"].round(1),
+                df["energy_not_supplied_mw"].round(1),
+            ], axis=-1),
+            hovertemplate=(
+                "<b>%{customdata[0]}</b><br>"
+                "Risk: %{customdata[1]}/100<br>"
+                "Failure probability: %{customdata[2]}%<br>"
+                "Resilience: %{customdata[3]}/100<br>"
+                "ENS: %{customdata[4]} MW"
+                "<extra></extra>"
+            ),
+            name="Postcode centres",
+        )
     )
 
-    # =====================================================
-    # GENERATE NON-OVERLAPPING POSTCODE CELLS
-    # =====================================================
-
-    used_cells = set()
-
-    for _, row in df.iterrows():
-
-        base_lat = float(row["lat"])
-        base_lon = float(row["lon"])
-
-        base_risk = float(row["final_risk_score"])
-
-        resilience = float(row["resilience_index"])
-
-        ens = float(row["energy_not_supplied_mw"])
-
-        social = float(row["social_vulnerability"])
-
-        place = str(row["place"])
-
-        # =================================================
-        # NUMBER OF POSTCODE MICROCELLS
-        # =================================================
-
-        if base_risk >= 75:
-
-            cells = 16
-
-        elif base_risk >= 55:
-
-            cells = 12
-
-        else:
-
-            cells = 8
-
-        # =================================================
-        # CREATE STRUCTURED GRID
-        # =================================================
-
-        grid_size = int(math.sqrt(cells)) + 1
-
-        counter = 0
-
-        for gx in range(grid_size):
-
-            for gy in range(grid_size):
-
-                if counter >= cells:
-                    break
-
-                # =========================================
-                # STRUCTURED CELL POSITION
-                # =========================================
-
-                lat = (
-                    base_lat
-                    + (gx - grid_size/2) * lat_step
+    # real outage overlay
+    if outages is not None and not outages.empty and {"lat", "lon"}.issubset(outages.columns):
+        odf = outages.copy()
+        odf["lat"] = pd.to_numeric(odf["lat"], errors="coerce")
+        odf["lon"] = pd.to_numeric(odf["lon"], errors="coerce")
+        odf = odf.dropna(subset=["lat", "lon"])
+        if not odf.empty:
+            fig.add_trace(
+                go.Scattermapbox(
+                    lat=odf["lat"],
+                    lon=odf["lon"],
+                    mode="markers",
+                    marker=dict(size=15, color="#ef4444", opacity=0.95),
+                    hovertemplate="<b>Outage evidence</b><br>lat=%{lat:.3f}<br>lon=%{lon:.3f}<extra></extra>",
+                    name="Real outages",
                 )
+            )
 
-                lon = (
-                    base_lon
-                    + (gy - grid_size/2) * lon_step
-                )
-
-                # =========================================
-                # PREVENT OVERLAP
-                # =========================================
-
-                cell_key = (
-                    round(lat, 3),
-                    round(lon, 3)
-                )
-
-                if cell_key in used_cells:
-                    continue
-
-                used_cells.add(cell_key)
-
-                # =========================================
-                # LOCAL VARIABILITY
-                # =========================================
-
-                local_risk = clamp(
-
-                    base_risk
-                    + np.random.uniform(-12, 12),
-
-                    5,
-                    100
-                )
-
-                local_resilience = clamp(
-
-                    resilience
-                    + np.random.uniform(-10, 10),
-
-                    10,
-                    100
-                )
-
-                colour = risk_colour(local_risk)
-
-                # =========================================
-                # HEXAGON-LIKE CELL
-                # =========================================
-
-                dx = lon_step * 0.42
-                dy = lat_step * 0.42
-
-                poly_lon = [
-                    lon - dx,
-                    lon - dx/2,
-                    lon + dx/2,
-                    lon + dx,
-                    lon + dx/2,
-                    lon - dx/2,
-                    lon - dx,
-                ]
-
-                poly_lat = [
-                    lat,
-                    lat + dy,
-                    lat + dy,
-                    lat,
-                    lat - dy,
-                    lat - dy,
-                    lat,
-                ]
-
-                # =========================================
-                # ADD CELL
-                # =========================================
-
+    # infrastructure overlay, drawn as subtle symbols only
+    if grid is not None and isinstance(grid, pd.DataFrame) and not grid.empty:
+        gdf = grid.copy()
+        lat_col = "lat" if "lat" in gdf.columns else None
+        lon_col = "lon" if "lon" in gdf.columns else None
+        if lat_col and lon_col:
+            gdf[lat_col] = pd.to_numeric(gdf[lat_col], errors="coerce")
+            gdf[lon_col] = pd.to_numeric(gdf[lon_col], errors="coerce")
+            gdf = gdf.dropna(subset=[lat_col, lon_col]).head(350)
+            if not gdf.empty:
                 fig.add_trace(
-
                     go.Scattermapbox(
-
-                        lon=poly_lon,
-
-                        lat=poly_lat,
-
-                        mode="lines",
-
-                        fill="toself",
-
-                        fillcolor=colour,
-
-                        opacity=0.82,
-
-                        line=dict(
-                            width=1,
-                            color="rgba(20,20,20,0.45)"
-                        ),
-
-                        hovertemplate=
-                        f"""
-                        <b>{place}</b><br>
-                        Local operational risk:
-                        {round(local_risk,1)}/100<br>
-                        Local resilience:
-                        {round(local_resilience,1)}/100<br>
-                        ENS:
-                        {round(ens,1)} MW<br>
-                        Social vulnerability:
-                        {round(social,1)}/100
-                        <extra></extra>
-                        """,
-
-                        showlegend=False,
+                        lat=gdf[lat_col],
+                        lon=gdf[lon_col],
+                        mode="markers",
+                        marker=dict(size=8, color="#38bdf8", opacity=0.65),
+                        hovertemplate="<b>Infrastructure asset</b><extra></extra>",
+                        name="Infrastructure",
                     )
                 )
 
-                counter += 1
-
-    # =====================================================
-    # COUNTY BOUNDARIES
-    # =====================================================
-
-    for feature in geojson_data["features"]:
-
-        coords = feature["geometry"]["coordinates"][0]
-
-        lons = [c[0] for c in coords]
-
-        lats = [c[1] for c in coords]
-
-        region_name = feature["properties"]["name"]
-
-        fig.add_trace(
-
-            go.Scattermapbox(
-
-                lon=lons,
-
-                lat=lats,
-
-                mode="lines",
-
-                line=dict(
-                    width=3,
-                    color="black"
-                ),
-
-                hoverinfo="skip",
-
-                showlegend=False,
-            )
-        )
-
-        # =================================================
-        # REGION LABEL
-        # =================================================
-
-        cx = np.mean(lons)
-        cy = np.mean(lats)
-
-        fig.add_trace(
-
-            go.Scattermapbox(
-
-                lon=[cx],
-
-                lat=[cy],
-
-                mode="text",
-
-                text=[region_name],
-
-                textfont=dict(
-                    size=15,
-                    color="black"
-                ),
-
-                showlegend=False,
-            )
-        )
-
-    # =====================================================
-    # RENDER MAP
-    # =====================================================
-
-    st.plotly_chart(
-        fig,
-        use_container_width=True
+    fig.update_layout(
+        mapbox=dict(
+            style="carto-darkmatter",
+            center={"lat": center["lat"], "lon": center["lon"]},
+            zoom=center["zoom"] - 0.15,
+        ),
+        height=860,
+        margin=dict(l=5, r=5, t=30, b=5),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=0.01,
+            xanchor="left",
+            x=0.01,
+            bgcolor="rgba(2,6,23,0.68)",
+            font=dict(color="white"),
+        ),
+        title=dict(
+            text=f"{region} postcode-level risk surface — {map_mode}",
+            font=dict(color="white", size=20),
+        ),
     )
 
-    # =====================================================
-    # LEGEND
-    # =====================================================
+    st.plotly_chart(fig, use_container_width=True)
 
-    st.markdown("## 🎨 Postcode operational legend")
-
-    st.markdown(
-        """
-        <div style="
-            display:flex;
-            gap:14px;
-            flex-wrap:wrap;
-            margin-bottom:24px;
-        ">
-
-        <div style="
-            background:#70e000;
-            color:black;
-            padding:10px 16px;
-            border-radius:12px;
-            font-weight:700;
-        ">
-        Stable infrastructure zone
-        </div>
-
-        <div style="
-            background:#00b4ff;
-            color:white;
-            padding:10px 16px;
-            border-radius:12px;
-            font-weight:700;
-        ">
-        Moderate operational stress
-        </div>
-
-        <div style="
-            background:#ffbe0b;
-            color:black;
-            padding:10px 16px;
-            border-radius:12px;
-            font-weight:700;
-        ">
-        Elevated vulnerability
-        </div>
-
-        <div style="
-            background:#ff7b00;
-            color:white;
-            padding:10px 16px;
-            border-radius:12px;
-            font-weight:700;
-        ">
-        High cascading-risk exposure
-        </div>
-
-        <div style="
-            background:#ff0054;
-            color:white;
-            padding:10px 16px;
-            border-radius:12px;
-            font-weight:700;
-        ">
-        Critical operational zone
-        </div>
-
-        </div>
-        """,
-
-        unsafe_allow_html=True,
-    )
-
-    # =====================================================
-    # SPATIAL ANALYTICS
-    # =====================================================
-
-    st.markdown("---")
-    st.markdown("## 📊 Spatial intelligence analytics")
-
-    a, b = st.columns(2)
-
-    with a:
-
-        fig2 = px.scatter(
-
-            df,
-
-            x="social_vulnerability",
-
-            y="final_risk_score",
-
-            size="energy_not_supplied_mw",
-
-            color="resilience_index",
-
-            hover_name="place",
-
-            color_continuous_scale="Turbo",
-
-            template=plotly_template(),
-
-            title="Socio-technical vulnerability clustering",
-        )
-
-        fig2.update_layout(
-            height=520
-        )
-
-        st.plotly_chart(
-            fig2,
-            use_container_width=True
-        )
-
-    with b:
-
-        fig3 = px.density_mapbox(
-
-            df,
-
-            lat="lat",
-
-            lon="lon",
-
-            z="final_risk_score",
-
-            radius=42,
-
-            center={
-                "lat": center["lat"],
-                "lon": center["lon"],
-            },
-
-            zoom=center["zoom"],
-
-            mapbox_style="carto-darkmatter",
-
-            color_continuous_scale="Turbo",
-
-            title="Operational stress propagation",
-        )
-
-        fig3.update_layout(
-            height=520
-        )
-
-        st.plotly_chart(
-            fig3,
-            use_container_width=True
-        )
-
-    # =====================================================
-    # INTERPRETATION
-    # =====================================================
-
-    st.markdown("---")
-
+    # -----------------------------------------------------
+    # Professional legend and explanation
+    # -----------------------------------------------------
     st.markdown(
         """
         <div class="note">
-
-        <b>Micro-spatial intelligence interpretation</b><br><br>
-
-        Unlike conventional county-level maps,
-        this engine creates postcode-scale
-        operational micro-zones.<br><br>
-
-        • Each coloured segment represents local operational variation.<br>
-        • Spatial fragmentation reveals intra-city vulnerability.<br>
-        • Infrastructure stress propagates dynamically across micro-zones.<br>
-        • Risk heterogeneity supports advanced resilience planning.<br><br>
-
-        The visualisation is intentionally designed
-        to resemble high-end geopolitical intelligence maps
-        and advanced urban digital twins.
-
+        <b>Map interpretation:</b> The coloured surface is generated from postcode/place risk
+        scores using inverse-distance weighting. Red and dark purple indicate high or severe
+        risk, orange/yellow indicate watch-level conditions, and green/blue indicate lower risk.
+        The old thick black polygons have been removed; administrative polygons are used only as
+        a hidden mask so the figure looks like a continuous regional GIS layer.
         </div>
         """,
-
         unsafe_allow_html=True,
     )
+
+    # -----------------------------------------------------
+    # Supporting analytics below the map
+    # -----------------------------------------------------
+    left, middle, right = st.columns([1, 1, 1])
+
+    with left:
+        risk_bins = pd.cut(
+            df["final_risk_score"],
+            bins=[0, 20, 40, 60, 80, 100],
+            labels=["Very low", "Low", "Moderate", "High", "Very high"],
+            include_lowest=True,
+        )
+        counts = risk_bins.value_counts().reindex(["Very low", "Low", "Moderate", "High", "Very high"]).fillna(0)
+        fig2 = px.pie(
+            names=counts.index,
+            values=counts.values,
+            hole=0.45,
+            title="Risk category share",
+            color=counts.index,
+            color_discrete_map={
+                "Very low": "#1f78b4",
+                "Low": "#2ca25f",
+                "Moderate": "#ffd92f",
+                "High": "#fdae21",
+                "Very high": "#d7191c",
+            },
+        )
+        fig2.update_layout(height=360, margin=dict(l=10, r=10, t=50, b=10))
+        st.plotly_chart(fig2, use_container_width=True)
+
+    with middle:
+        top = df.sort_values("final_risk_score", ascending=False).head(10).copy()
+        fig3 = px.bar(
+            top,
+            x="final_risk_score",
+            y="place",
+            orientation="h",
+            color="final_risk_score",
+            color_continuous_scale=["#2ca25f", "#ffd92f", "#fdae21", "#d7191c", "#5b0017"],
+            title="Highest-risk postcode centres",
+        )
+        fig3.update_layout(height=360, yaxis={"categoryorder": "total ascending"}, margin=dict(l=10, r=10, t=50, b=10))
+        st.plotly_chart(fig3, use_container_width=True)
+
+    with right:
+        fig4 = px.histogram(
+            surface_df if not surface_df.empty else df.rename(columns={"final_risk_score": "risk"}),
+            x="risk" if not surface_df.empty else "risk",
+            nbins=24,
+            title="Mapped risk-surface distribution",
+            color_discrete_sequence=["#f97316"],
+        )
+        fig4.update_layout(height=360, margin=dict(l=10, r=10, t=50, b=10), xaxis_title="Risk score")
+        st.plotly_chart(fig4, use_container_width=True)
+
+    display_cols = [
+        "place", "postcode_prefix", "final_risk_score", "grid_failure_probability",
+        "resilience_index", "energy_not_supplied_mw", "social_vulnerability"
+    ]
+    st.markdown("#### Postcode spatial intelligence table")
+    st.dataframe(df[[c for c in display_cols if c in df.columns]], use_container_width=True, hide_index=True)
 
 
 def resilience_tab(places: pd.DataFrame) -> None:
