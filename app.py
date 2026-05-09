@@ -3090,17 +3090,66 @@ def social_vulnerability_score(pop_density: float, imd_score: float) -> float:
     return round(clamp(density_component + imd_component, 0, 100), 2)
 
 
-def grid_failure_probability(risk_score: float, outage_count: float, ens_mw: float) -> float:
-    """Calibrated technical grid-failure probability."""
-    risk_n = clamp(safe_float(risk_score) / 100, 0, 1)
-    outage_n = clamp(safe_float(outage_count) / 10, 0, 1)
-    ens_n = clamp(safe_float(ens_mw) / 2500, 0, 1)
+def grid_failure_probability(
+    risk_score: float,
+    outage_count: float,
+    ens_mw: float,
+    rain_mm: float = 0.0,
+    temperature_c: float = 12.0,
+    wind_kmh: float = 0.0,
+    social_vulnerability: float = 0.0,
+) -> float:
+    """
+    Weather-sensitive technical grid-failure probability.
 
-    # Logistic calibration gives clearer separation: ordinary conditions remain low,
-    # but rainy/cold high-risk states and outage clusters no longer look artificially safe.
-    z = -3.15 + 3.20 * risk_n + 1.55 * outage_n + 1.10 * ens_n
+    This is an interpretable weighted-logistic prototype inspired by published
+    weather-related outage forecasting practice. It is not a copied coefficient
+    set from a paper, because real coefficients must be estimated from a local
+    utility outage history. The formulation deliberately includes light rain and
+    cold-wet conditions so a rainy 8 °C day is not misclassified as almost zero
+    operational stress.
+    """
+    risk_n = clamp(safe_float(risk_score) / 100, 0, 1)
+    outage_n = clamp(safe_float(outage_count) / 8, 0, 1)
+    ens_n = clamp(safe_float(ens_mw) / 1200, 0, 1)
+    rain = safe_float(rain_mm)
+    temp = safe_float(temperature_c)
+    wind = safe_float(wind_kmh)
+    social_n = clamp(safe_float(social_vulnerability) / 100, 0, 1)
+
+    # Rain is treated as mm/hour. Any active rain matters; heavy rain saturates.
+    rain_n = clamp(rain / 3.0, 0, 1)
+    persistent_rain_n = 1.0 if rain >= 0.25 else 0.0
+    cold_n = clamp((9.0 - temp) / 9.0, 0, 1)
+    wind_n = clamp((wind - 18.0) / 42.0, 0, 1)
+    cold_wet_n = min(rain_n, cold_n)
+
+    # Moderate-risk transition around 8–15% rather than 1–2%; high stress still
+    # requires outages, ENS, strong wind or high regional risk.
+    z = (
+        -2.35
+        + 2.70 * risk_n
+        + 1.20 * outage_n
+        + 1.05 * ens_n
+        + 0.95 * rain_n
+        + 0.50 * persistent_rain_n
+        + 0.70 * cold_n
+        + 0.85 * cold_wet_n
+        + 0.65 * wind_n
+        + 0.45 * social_n
+    )
     probability = 1 / (1 + math.exp(-z))
-    return round(clamp(probability, 0.01, 0.90), 3)
+
+    # Floor for observable cold/wet operating stress. This avoids a misleading
+    # 1–2% display when users can see active cold rain outside.
+    if rain >= 0.25 and temp <= 10:
+        probability = max(probability, 0.085)
+    if rain >= 1.0 and temp <= 10:
+        probability = max(probability, 0.12)
+    if rain >= 2.5 or wind >= 35 or outage_count >= 1 or ens_mw >= 25:
+        probability = max(probability, 0.16)
+
+    return round(clamp(probability, 0.015, 0.92), 3)
 
 
 def compute_multilayer_risk(row: Dict[str, Any], outage_intensity: float, ens_mw: float) -> Dict[str, float]:
@@ -3121,15 +3170,19 @@ def compute_multilayer_risk(row: Dict[str, Any], outage_intensity: float, ens_mw
 
     # UK realism calibration: light rain should not be invisible, and cold wet
     # weather should create a watch-level operational signal even without outages.
-    wind_score = clamp((wind - 14) / 46, 0, 1) * 22
-    rain_score = clamp(rain / 6.0, 0, 1) * 24
-    persistent_rain_score = clamp(rain / 1.2, 0, 1) * 6
-    cloud_score = clamp((cloud - 65) / 35, 0, 1) * 4
-    cold_score = clamp((8 - temp) / 10, 0, 1) * 8
+    wind_score = clamp((wind - 12) / 43, 0, 1) * 21
+    # Rain is mm/hour. A value around 0.25–1.5 mm/h is operationally visible,
+    # so the first rain component starts immediately instead of waiting for flood-level rain.
+    active_rain_score = 8 if rain >= 0.25 else 0
+    rain_score = clamp(rain / 3.0, 0, 1) * 23
+    persistent_rain_score = clamp(rain / 1.0, 0, 1) * 8
+    cloud_score = clamp((cloud - 60) / 40, 0, 1) * 5
+    cold_score = clamp((9 - temp) / 10, 0, 1) * 10
+    cold_wet_score = min(clamp(rain / 2.0, 0, 1), clamp((10 - temp) / 10, 0, 1)) * 12
     heat_score = clamp((temp - 28) / 12, 0, 1) * 8
-    humidity_score = clamp((humidity - 84) / 16, 0, 1) * 3
+    humidity_score = clamp((humidity - 82) / 18, 0, 1) * 4
 
-    weather_score = wind_score + rain_score + persistent_rain_score + cloud_score + cold_score + heat_score + humidity_score
+    weather_score = wind_score + active_rain_score + rain_score + persistent_rain_score + cloud_score + cold_score + cold_wet_score + heat_score + humidity_score
 
     pollution_score = (
         clamp((aqi - 55) / 95, 0, 1) * 10
@@ -3149,11 +3202,15 @@ def compute_multilayer_risk(row: Dict[str, Any], outage_intensity: float, ens_mw
     if is_calm_live_weather(row, row.get("nearby_outages_25km", 0), row.get("affected_customers_nearby", 0)):
         score = min(score, 34.0)
 
-    failure_probability = 1 / (1 + np.exp(-0.075 * (score - 72)))
+    failure_probability = 1 / (1 + np.exp(-0.085 * (score - 50)))
+    if rain >= 0.25 and temp <= 10:
+        failure_probability = max(failure_probability, 0.08)
+    if rain >= 1.0 and temp <= 10:
+        failure_probability = max(failure_probability, 0.11)
 
     return {
         "risk_score": round(float(score), 2),
-        "failure_probability": round(float(clamp(failure_probability, 0.01, 0.80)), 3),
+        "failure_probability": round(float(clamp(failure_probability, 0.015, 0.82)), 3),
         "renewable_generation_mw": round(float(renewable_mw), 2),
         "net_load_mw": round(float(net_load), 2),
     }
@@ -3236,7 +3293,7 @@ def advanced_monte_carlo(row: Dict[str, Any], outage_intensity: float, ens_mw: f
         model = compute_multilayer_risk(sim, outage_intensity, sim_ens)
         cascade = cascade_breakdown(model["failure_probability"])
         renewable_fail = renewable_failure_probability(sim)
-        grid_fail = grid_failure_probability(model["risk_score"], safe_float(row.get("nearby_outages_25km")), sim_ens)
+        grid_fail = grid_failure_probability(model["risk_score"], safe_float(row.get("nearby_outages_25km")), sim_ens, sim.get("precipitation"), sim.get("temperature_2m"), sim.get("wind_speed_10m"), row.get("social_vulnerability"))
         final_risk = clamp(model["risk_score"] * (1 + cascade["system_stress"] * 0.75), 0, 100)
 
         finance = compute_financial_loss(
@@ -3491,7 +3548,7 @@ def build_places(region: str, scenario_name: str, mc_runs: int) -> Tuple[pd.Data
             cascade = cascade_breakdown(base["failure_probability"])
 
         renewable_fail = renewable_failure_probability(row)
-        grid_fail = grid_failure_probability(final_risk, nearby, ens_mw)
+        grid_fail = grid_failure_probability(final_risk, nearby, ens_mw, row.get("precipitation"), row.get("temperature_2m"), row.get("wind_speed_10m"), social_vuln)
 
         if scenario_name != "Live / Real-time":
             grid_fail = clamp(max(grid_fail, stress_profile["grid_floor"]), 0, 0.95)
@@ -3583,9 +3640,10 @@ def build_places(region: str, scenario_name: str, mc_runs: int) -> Tuple[pd.Data
     # or noisy external record from pushing good-weather areas into Severe/Fragile.
     if scenario_name == "Live / Real-time" and not df.empty:
         calm_mask = (
-            (pd.to_numeric(df["wind_speed_10m"], errors="coerce").fillna(0) < 24)
-            & (pd.to_numeric(df["precipitation"], errors="coerce").fillna(0) < 2.0)
-            & (pd.to_numeric(df["european_aqi"], errors="coerce").fillna(0) < 65)
+            (pd.to_numeric(df["wind_speed_10m"], errors="coerce").fillna(0) < 18)
+            & (pd.to_numeric(df["precipitation"], errors="coerce").fillna(0) < 0.25)
+            & (pd.to_numeric(df["european_aqi"], errors="coerce").fillna(0) < 55)
+            & (pd.to_numeric(df["temperature_2m"], errors="coerce").fillna(12) > 3)
             & (pd.to_numeric(df["nearby_outages_25km"], errors="coerce").fillna(0) <= 3)
         )
         df.loc[calm_mask, "final_risk_score"] = df.loc[calm_mask, "final_risk_score"].clip(upper=36)
@@ -4241,6 +4299,24 @@ def render_pydeck_map(region, places, outages, pc, grid, map_mode):
     flood = load_flood_data()
 
     layers = []
+
+    # =========================
+    # FULL-COLOUR REGIONAL MOSAIC BACKGROUND
+    # =========================
+    regional_geojson = make_place_cell_geojson(df, region)
+    layers.append(
+        pdk.Layer(
+            "GeoJsonLayer",
+            data=regional_geojson,
+            pickable=True,
+            stroked=True,
+            filled=True,
+            opacity=0.42,
+            get_fill_color="properties.colour_rgb",
+            get_line_color=[255, 255, 255, 70],
+            line_width_min_pixels=1,
+        )
+    )
 
     # =========================
     # REGION OVERLAY
@@ -5228,6 +5304,17 @@ def regional_risk_palette(score: float) -> str:
     return "#7bd000"       # green / low
 
 
+def regional_risk_rgb(score: float) -> List[int]:
+    score = safe_float(score)
+    if score >= 85:
+        return [216, 0, 115, 175]
+    if score >= 65:
+        return [255, 151, 0, 170]
+    if score >= 40:
+        return [0, 112, 192, 160]
+    return [123, 208, 0, 150]
+
+
 def make_place_cell_geojson(places: pd.DataFrame, region: str) -> Dict[str, Any]:
     """
     Build a lightweight colourful regional polygon map without geopandas.
@@ -5283,8 +5370,44 @@ def make_place_cell_geojson(places: pd.DataFrame, region: str) -> Dict[str, Any]
                 "failure_probability": round(fail * 100, 1),
                 "ens": round(ens, 2),
                 "colour": regional_risk_palette(risk),
+                "colour_rgb": regional_risk_rgb(risk),
             },
         })
+
+    # Full-coverage risk tessellation: every part of the regional bbox receives
+    # the colour of the nearest configured place. This prevents colourless areas
+    # in North East/Yorkshire while staying Streamlit-Cloud safe without geopandas.
+    tile_cols = 9 if region == "Yorkshire" else 8
+    tile_rows = 7 if region == "Yorkshire" else 8
+    step_lon = (max_lon - min_lon) / tile_cols
+    step_lat = (max_lat - min_lat) / tile_rows
+    for ix in range(tile_cols):
+        for iy in range(tile_rows):
+            west = min_lon + ix * step_lon
+            east = min_lon + (ix + 1) * step_lon
+            south = min_lat + iy * step_lat
+            north = min_lat + (iy + 1) * step_lat
+            cx = (west + east) / 2
+            cy = (south + north) / 2
+            nearest_idx = (((df["lon"] - cx) ** 2) + ((df["lat"] - cy) ** 2)).idxmin()
+            row = df.loc[nearest_idx]
+            risk = safe_float(row.get("final_risk_score"))
+            features.insert(0, {
+                "type": "Feature",
+                "geometry": {"type": "Polygon", "coordinates": [[[west, south], [east, south], [east, north], [west, north], [west, south]]]},
+                "properties": {
+                    "place": f"Nearest: {row.get('place', 'Unknown')}",
+                    "postcode": str(row.get("postcode_prefix", "")),
+                    "risk": round(risk, 2),
+                    "risk_label": risk_label(risk),
+                    "resilience": round(safe_float(row.get("resilience_index")), 2),
+                    "failure_probability": round(safe_float(row.get("failure_probability")) * 100, 1),
+                    "ens": round(safe_float(row.get("energy_not_supplied_mw")), 2),
+                    "colour": regional_risk_palette(risk),
+                    "colour_rgb": regional_risk_rgb(risk),
+                    "is_background_tile": True,
+                },
+            })
 
     return {"type": "FeatureCollection", "features": features}
 
