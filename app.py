@@ -69,9 +69,9 @@ HAZARD_TYPES = {
     },
     "Flood / heavy rain": {
         "driver": "precipitation",
-        "unit": "mm",
-        "threshold_low": 1.5,
-        "threshold_high": 8.0,
+        "unit": "mm/h",
+        "threshold_low": 0.4,
+        "threshold_high": 6.0,
         "description": "Surface-water flooding, substation access risk, basement asset exposure and cascading delays.",
     },
     "Drought": {
@@ -158,11 +158,11 @@ def is_calm_live_weather(row: Dict[str, Any], outage_count: float = 0, affected_
     """Return True for ordinary UK operating conditions in Live / Real-time mode."""
     return (
         str(row.get("scenario_name", "")) == "Live / Real-time"
-        and safe_float(row.get("wind_speed_10m")) < 24
-        and safe_float(row.get("precipitation")) < 2.0
-        and safe_float(row.get("european_aqi")) < 65
-        and safe_float(row.get("temperature_2m")) > -4
-        and safe_float(row.get("temperature_2m")) < 31
+        and safe_float(row.get("wind_speed_10m")) < 18
+        and safe_float(row.get("precipitation")) < 0.25
+        and safe_float(row.get("european_aqi")) < 55
+        and safe_float(row.get("temperature_2m")) > 3
+        and safe_float(row.get("temperature_2m")) < 25
         and safe_float(outage_count) <= 3
         and safe_float(affected_customers) <= 1200
     )
@@ -229,39 +229,17 @@ def hazard_resilience_score(
     finance_n = clamp(finance / 20_000_000, 0, 1)
 
     risk_n = clamp(risk / 100, 0, 1)
-    
+
     # =========================================================
-    # UK WINTER GRID FACTOR
+    # CALM WEATHER DETECTION
     # =========================================================
-
-    winter_factor = 0
-    
-    month = datetime.utcnow().month
-
-    if month in [11, 12, 1, 2]:
-        
-        winter_factor += 0.12
-        
-        # wet-cold overhead exposure
-
-        if rain > 1.2 and wind > 14:
-            
-            winter_factor += 0.18
-
-            # freezing infrastructure stress
-
-        if safe_float(row.get("temperature_2m")) < 2:
-
-            winter_factor += 0.10
-            # =========================================================
-            # CALM WEATHER DETECTION
-            # =========================================================
 
     calm_weather = (
-        wind < 12
-        and rain < 0.8
-        and aqi < 45
-        and outage < 1
+        wind < 18
+        and rain < 0.25
+        and aqi < 55
+        and 3 < safe_float(row.get("temperature_2m")) < 25
+        and outage < 2
     )
 
     # =========================================================
@@ -631,9 +609,9 @@ def enhanced_failure_probability(
 
     hazard_n = clamp(hazard_stress / 100, 0, 1)
 
-    wind_n = clamp(wind / 42, 0, 1)
+    wind_n = clamp(wind / 90, 0, 1)
 
-    rain_n = clamp(rain / 10, 0, 1)
+    rain_n = clamp(rain / 40, 0, 1)
 
     aqi_n = clamp(aqi / 150, 0, 1)
 
@@ -646,9 +624,10 @@ def enhanced_failure_probability(
     # UK grids are highly resilient under ordinary conditions.
 
     calm_weather = (
-        wind < 20
-        and rain < 3
-        and aqi < 60
+        wind < 18
+        and rain < 0.25
+        and aqi < 55
+        and 3 < safe_float(row.get("temperature_2m")) < 25
         and outage < 2
     )
 
@@ -656,20 +635,10 @@ def enhanced_failure_probability(
     # DYNAMIC HAZARD WEIGHTING
     # =========================================================
 
-    weather_severity = (
-
-        0.42 * clamp(wind / 45, 0, 1)
-        + 0.33 * clamp(rain / 12, 0, 1)
-        + 0.15 * clamp(aqi / 90, 0, 1)
-        + 0.10 * clamp(outage / 5, 0, 1)
-
-    )
-
-    weather_multiplier = clamp(
-        0.35 + weather_severity,
-        0.35,
-        1.75
-    )
+    if calm_weather:
+        weather_multiplier = 0.42
+    else:
+        weather_multiplier = 1.0
 
     # =========================================================
     # CALIBRATED LOGISTIC MODEL
@@ -705,7 +674,7 @@ def enhanced_failure_probability(
         )
 
         # overall system stress
-        + 0.42 * risk_n
+        + 0.25 * risk_n
     )
 
     # =========================================================
@@ -1561,6 +1530,7 @@ NPG_DATASET_URL = (
 
 OPEN_METEO_WEATHER_URL = "https://api.open-meteo.com/v1/forecast"
 OPEN_METEO_AIR_URL = "https://air-quality-api.open-meteo.com/v1/air-quality"
+NASA_POWER_HOURLY_URL = "https://power.larc.nasa.gov/api/temporal/hourly/point"
 
 WEATHER_CURRENT_VARS = ",".join([
     "temperature_2m",
@@ -2684,6 +2654,99 @@ def infer_iod_domain_vulnerability(place: str, region: str, meta: Dict[str, Any]
 # EXTERNAL DATA FETCHING
 # =============================================================================
 
+def _latest_nasa_value(series: Dict[str, Any], default: float = 0.0) -> float:
+    """Return the newest valid numeric value from a NASA POWER parameter dictionary."""
+    if not isinstance(series, dict) or not series:
+        return default
+    for key in sorted(series.keys(), reverse=True):
+        try:
+            value = float(series[key])
+            # NASA missing values are commonly very negative sentinels.
+            if value > -900:
+                return value
+        except Exception:
+            continue
+    return default
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_nasa_power_hourly(lat: float, lon: float) -> Dict[str, Any]:
+    """
+    Fetch recent NASA POWER hourly meteorology for cross-checking.
+
+    NASA POWER is excellent for satellite/reanalysis-backed solar and
+    meteorological context. It is not treated as the only live-now source here;
+    instead it validates and fills weak Open-Meteo fields such as precipitation,
+    wind, humidity, pressure and radiation.
+    """
+    end = datetime.now(UTC).strftime("%Y%m%d")
+    start = (datetime.now(UTC) - timedelta(days=2)).strftime("%Y%m%d")
+    params = {
+        "parameters": "T2M,RH2M,WS10M,PRECTOTCORR,ALLSKY_SFC_SW_DWN,PS",
+        "community": "RE",
+        "longitude": lon,
+        "latitude": lat,
+        "start": start,
+        "end": end,
+        "format": "JSON",
+        "time-standard": "UTC",
+    }
+    payload = requests_json(NASA_POWER_HOURLY_URL, params=params, timeout=30)
+    parameter = payload.get("properties", {}).get("parameter", {}) if isinstance(payload, dict) else {}
+    if not parameter:
+        return {"available": False, "source": "NASA POWER unavailable"}
+
+    # NASA WS10M is m/s; app uses km/h, so multiply by 3.6.
+    # PRECTOTCORR hourly is precipitation intensity in mm/hour.
+    return {
+        "available": True,
+        "source": "NASA POWER hourly",
+        "temperature_2m": _latest_nasa_value(parameter.get("T2M"), np.nan),
+        "relative_humidity_2m": _latest_nasa_value(parameter.get("RH2M"), np.nan),
+        "wind_speed_10m": _latest_nasa_value(parameter.get("WS10M"), np.nan) * 3.6,
+        "precipitation": max(0.0, _latest_nasa_value(parameter.get("PRECTOTCORR"), 0.0)),
+        "shortwave_radiation": max(0.0, _latest_nasa_value(parameter.get("ALLSKY_SFC_SW_DWN"), 0.0)),
+        "surface_pressure": _latest_nasa_value(parameter.get("PS"), np.nan) * 10.0,
+    }
+
+
+def merge_weather_sources(open_meteo_payload: Dict[str, Any], nasa_payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Merge Open-Meteo current conditions with NASA POWER cross-check values."""
+    current = dict(open_meteo_payload.get("current", {}) if isinstance(open_meteo_payload, dict) else {})
+    if not current:
+        current = {}
+
+    used = ["Open-Meteo current"] if current else []
+    disagreements = []
+
+    if nasa_payload.get("available"):
+        used.append("NASA POWER hourly cross-check")
+        for key in ["temperature_2m", "relative_humidity_2m", "wind_speed_10m", "precipitation", "shortwave_radiation", "surface_pressure"]:
+            nasa_v = safe_float(nasa_payload.get(key), np.nan)
+            om_v = safe_float(current.get(key), np.nan)
+            if math.isnan(nasa_v):
+                continue
+            if math.isnan(om_v):
+                current[key] = nasa_v
+                continue
+            # Rain is risk-critical: do not let a zero from one source erase rain from the other.
+            if key == "precipitation":
+                if nasa_v > 0.05 and om_v < 0.05:
+                    disagreements.append("Open-Meteo rain near zero, NASA rain positive")
+                current[key] = max(om_v, nasa_v)
+            elif key == "temperature_2m" and abs(om_v - nasa_v) > 3.0:
+                disagreements.append("temperature differs by more than 3°C")
+                current[key] = round((om_v + nasa_v) / 2, 2)
+            elif key == "wind_speed_10m" and abs(om_v - nasa_v) > 12.0:
+                disagreements.append("wind differs by more than 12 km/h")
+                current[key] = max(om_v, nasa_v)
+
+    current["weather_sources_used"] = ", ".join(used) if used else "fallback only"
+    current["weather_quality_flag"] = "OK" if not disagreements else "; ".join(disagreements)
+    return {"current": current, "open_meteo_raw": open_meteo_payload, "nasa_power_raw": nasa_payload}
+
+
+@st.cache_data(ttl=900, show_spinner=False)
 def fetch_weather(lat: float, lon: float) -> Dict[str, Any]:
     params = {
         "latitude": lat,
@@ -2691,7 +2754,9 @@ def fetch_weather(lat: float, lon: float) -> Dict[str, Any]:
         "current": WEATHER_CURRENT_VARS,
         "timezone": "Europe/London",
     }
-    return requests_json(OPEN_METEO_WEATHER_URL, params=params)
+    open_meteo = requests_json(OPEN_METEO_WEATHER_URL, params=params, timeout=20)
+    nasa = fetch_nasa_power_hourly(lat, lon)
+    return merge_weather_sources(open_meteo, nasa)
 
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -3031,8 +3096,11 @@ def grid_failure_probability(risk_score: float, outage_count: float, ens_mw: flo
     outage_n = clamp(safe_float(outage_count) / 10, 0, 1)
     ens_n = clamp(safe_float(ens_mw) / 2500, 0, 1)
 
-    probability = 0.025 + 0.22 * risk_n + 0.20 * outage_n + 0.14 * ens_n
-    return round(clamp(probability, 0.01, 0.75), 3)
+    # Logistic calibration gives clearer separation: ordinary conditions remain low,
+    # but rainy/cold high-risk states and outage clusters no longer look artificially safe.
+    z = -3.15 + 3.20 * risk_n + 1.55 * outage_n + 1.10 * ens_n
+    probability = 1 / (1 + math.exp(-z))
+    return round(clamp(probability, 0.01, 0.90), 3)
 
 
 def compute_multilayer_risk(row: Dict[str, Any], outage_intensity: float, ens_mw: float) -> Dict[str, float]:
@@ -3051,13 +3119,17 @@ def compute_multilayer_risk(row: Dict[str, Any], outage_intensity: float, ens_mw
     temp = safe_float(row.get("temperature_2m"))
     humidity = safe_float(row.get("relative_humidity_2m"))
 
-    wind_score = clamp((wind - 18) / 52, 0, 1) * 24
-    rain_score = clamp((rain - 1.5) / 23.5, 0, 1) * 20
-    cloud_score = clamp((cloud - 75) / 25, 0, 1) * 3
-    temp_score = clamp(max(abs(temp - 18) - 10, 0) / 18, 0, 1) * 8
-    humidity_score = clamp((humidity - 88) / 12, 0, 1) * 2
+    # UK realism calibration: light rain should not be invisible, and cold wet
+    # weather should create a watch-level operational signal even without outages.
+    wind_score = clamp((wind - 14) / 46, 0, 1) * 22
+    rain_score = clamp(rain / 6.0, 0, 1) * 24
+    persistent_rain_score = clamp(rain / 1.2, 0, 1) * 6
+    cloud_score = clamp((cloud - 65) / 35, 0, 1) * 4
+    cold_score = clamp((8 - temp) / 10, 0, 1) * 8
+    heat_score = clamp((temp - 28) / 12, 0, 1) * 8
+    humidity_score = clamp((humidity - 84) / 16, 0, 1) * 3
 
-    weather_score = wind_score + rain_score + cloud_score + temp_score + humidity_score
+    weather_score = wind_score + rain_score + persistent_rain_score + cloud_score + cold_score + heat_score + humidity_score
 
     pollution_score = (
         clamp((aqi - 55) / 95, 0, 1) * 10
@@ -3483,6 +3555,8 @@ def build_places(region: str, scenario_name: str, mc_runs: int) -> Tuple[pd.Data
             "affected_customers_nearby": round(affected_customers, 1),
             "energy_not_supplied_mw": round(ens_mw, 2),
             "compound_hazard_proxy": row.get("compound_hazard_proxy", compute_compound_hazard_proxy(row)),
+            "weather_sources_used": row.get("weather_sources_used", "unknown"),
+            "weather_quality_flag": row.get("weather_quality_flag", "not checked"),
             "final_risk_score": round(final_risk, 2),
             "imd_score": imd_info["imd_score"],
             "social_vulnerability": social_vuln,
@@ -6440,7 +6514,7 @@ def render_finance_funding_tab(places: pd.DataFrame, pc: pd.DataFrame) -> None:
 
 def render_readme_tab() -> None:
     st.subheader("README — model, data, formulae and interpretation")
-    st.markdown('\n<div class="card">\n<h2 style="color:white;margin-top:0;">SAT-Guard Digital Twin — README</h2>\n<p style="color:#cbd5e1;line-height:1.65;">\nThis Streamlit app is a transparent research prototype for regional electricity-grid resilience assessment. It combines live or fallback weather, public outage information, social vulnerability, energy-not-supplied, financial impact, failure probability, investment prioritisation and Monte Carlo uncertainty. It is written for users who may not have a background in power systems, statistics or socio-economic vulnerability analysis.\n</p>\n</div>\n\n### 1. Data sources used in the app\n\n**Weather and air quality.** The app calls Open-Meteo weather and air-quality endpoints when available. If an API call fails, safe fallback values are generated so the dashboard still runs. Weather variables include wind speed, precipitation, temperature, humidity, cloud cover, solar radiation and air-quality indicators.\n\n**Northern Powergrid outage data.** The app attempts to read public outage records from Northern Powergrid. If no geocoded outage record is available, the app may create synthetic map points for visual continuity. These points are now marked as synthetic and are not allowed to create live-mode warnings, failure escalation or fragile labels.\n\n**IoD/IMD socio-economic evidence.** IoD means Indices of Deprivation. IMD means Index of Multiple Deprivation. These datasets summarise relative deprivation across small areas using domains such as income, employment, education, health, crime, housing/services and living environment. In this app, values are converted onto a 0–100 scale, where a higher value means higher social vulnerability. If detailed IoD2025 files are not available, the app uses a transparent fallback based on local vulnerability proxies and population density.\n\n### 2. Live-mode warning correction\n\nA previous version could show warning, severe or fragile states in North East and Yorkshire even when observed weather was good. The main cause was that fallback outage markers and a fixed baseline ENS term could behave like real outage evidence. This version fixes that by separating synthetic outage points from real outage records, ignoring synthetic outages in live-mode scoring, setting live ENS to zero when no real outage and no affected customers are present, capping live risk under calm weather, and preventing calm live conditions from being labelled fragile unless real evidence exists.\n\n### 3. Main tabs\n\n**Executive overview** shows the regional intelligence table, risk/resilience gauges, location ranking and social-vulnerability relationship. **Simulation** provides an animated operational weather view. **Natural hazards** compares postcode resilience across wind, flood, drought, heat/air-quality stress and compound hazard. **IoD2025 socio-economic evidence** explains deprivation data matching. **Spatial intelligence** shows a colourful North East/Yorkshire regional risk mosaic, map-based risk, infrastructure and outage overlays with legends. **Resilience** shows resilience rankings. **Failure & investment** combines failure probability and investment actions. **Scenario losses** compares what-if stress scenarios. **Finance & funding** combines loss modelling and funding prioritisation. **Monte Carlo** keeps only the improved simulation model under the simple name Monte Carlo. **Validation / black-box** documents transparency checks. **README** explains the model. **Data / Export** exposes output tables.\n\n### 4. Core formulae\n\n**Weather risk component**\n\n`weather_score = 27×clip(wind/45) + 18×clip(rain/6) + 7×clip(cloud/100) + 8×clip(|temperature−18|/20) + 4×clip(humidity/100)`\n\n**Pollution and public-health stress**\n\n`pollution_score = 17×clip(AQI/100) + 9×clip(PM2.5/60)`\n\n**Renewable generation proxy**\n\n`solar_MW = shortwave_radiation × 0.18`\n\n`wind_MW = min((wind_speed/12)^3, 1.20) × 95`\n\nThe wind term follows the cubic character of wind-power availability before rated output. It is a simplified proxy, not a turbine-specific engineering model.\n\n**Energy Not Supplied (ENS)**\n\n`ENS_MW = (100×outage_count + 0.014×affected_customers + base_load_component) × scenario_outage_multiplier`\n\nIn live mode, when there are no real outages and no affected customers, the base load component is zero. This prevents normal demand from being misclassified as unserved energy.\n\n**Failure probability**\n\n`failure_probability = 1 / (1 + exp(-0.065 × (risk_score − 60)))`\n\nThis logistic function converts risk into a probability-like value. Scores near 60 sit near the transition zone; low risk remains low probability, while high risk rises non-linearly.\n\n**Cascade stress**\n\n`water = power^1.35 × 0.74`\n\n`telecom = power^1.22 × 0.82`\n\n`transport = ((power + telecom)/2) × 0.70`\n\n`social = ((power + water + telecom)/3) × 0.75`\n\n**Resilience index**\n\n`resilience = 100 − (0.42×risk + 0.20×social_vulnerability + 17×grid_failure + 10×renewable_failure + 12×system_stress + finance_penalty)`\n\nA high score means the place is more robust. A low score means the area is stressed or fragile. The finance penalty is capped so one very large value does not dominate all other factors.\n\n**Social vulnerability**\n\n`social_vulnerability = 40×clip(population_density/4500) + 60×clip(IMD_score/100)`\n\nWhen IoD domain data are available, the app blends domain vulnerability with this fallback score. The aim is to represent that a technically similar outage may have a larger human impact in a more deprived or densely populated area.\n\n**Financial loss**\n\n`total_loss = VoLL_loss + customer_interruption_loss + business_disruption_loss + restoration_loss + critical_services_loss`\n\n`VoLL_loss = ENS_MWh × £17,000/MWh`\n\n`customer_interruption_loss = affected_customers × £38`\n\n`business_disruption_loss = ENS_MWh × £1,100 × business_density`\n\n`restoration_loss = outage_count × £18,500`\n\n`critical_services_loss = ENS_MWh × £320 × social_vulnerability_fraction`\n\nThese figures are scenario assumptions and should be calibrated with local regulatory or utility data before operational use.\n\n**Investment recommendation score**\n\n`recommendation = 0.30×risk + 0.22×social_vulnerability + 0.18×(100−resilience) + 0.13×loss_percentile + 0.10×ENS_percentile + 0.07×outage_pressure`\n\n**Funding priority score**\n\n`funding = 0.26×risk + 0.20×(100−resilience) + 0.18×social_vulnerability + 0.15×loss_exposure + 0.11×ENS_exposure + 0.06×outage_exposure + 0.04×recommendation`\n\n**Monte Carlo model**\n\nThe Monte Carlo model uses a shared storm shock so wind, rain, outage count and ENS move together. It also uses triangular demand uncertainty and lognormal restoration-cost tails. Outputs include mean risk, P95 risk, mean failure probability, P95 failure probability, mean loss, P95 loss and CVaR95 loss.\n\n### 5. Colour legend\n\nGreen means low risk or robust resilience. Yellow means moderate watch-level stress. Orange means high warning-level stress. Red means severe risk or fragile resilience. The dashboard displays legends near regional risk visuals so users can understand what the colours mean.\n\n### 6. Important limitations\n\nThis is a research-grade prototype, not an official operational control system. Weather APIs, outage APIs and socio-economic files may be incomplete or unavailable. All scoring weights are transparent assumptions and should be calibrated with historical outage, asset, feeder, substation, customer-minute-lost and restoration-cost data before production use.\n\n### 7. References for the modelling logic\n\n[1] Ofgem RIIO electricity-distribution resilience and interruption reporting frameworks.  \n[2] UK Department for Energy Security and Net Zero value-of-lost-load and electricity-security appraisal evidence.  \n[3] English Indices of Deprivation technical reports for IMD/IoD domain interpretation.  \n[4] Open-Meteo weather and air-quality API documentation for meteorological variables.  \n[5] Northern Powergrid open-data documentation for live power-cut records.  \n[6] Billinton and Allan, *Reliability Evaluation of Power Systems*, for reliability and interruption-impact modelling.  \n[7] Panteli and Mancarella resilience literature for weather-driven power-system resilience concepts.  \n[8] Lund and Kempton vehicle-to-grid literature for EV/V2G support concepts.  \n[9] IEC/IEEE power-system dependability and resilience guidance.\n', unsafe_allow_html=True)
+    st.markdown('\n<div class="card">\n<h2 style="color:white;margin-top:0;">SAT-Guard Digital Twin — README</h2>\n<p style="color:#cbd5e1;line-height:1.65;">\nThis Streamlit app is a transparent research prototype for regional electricity-grid resilience assessment. It combines live or fallback weather, public outage information, social vulnerability, energy-not-supplied, financial impact, failure probability, investment prioritisation and Monte Carlo uncertainty. It is written for users who may not have a background in power systems, statistics or socio-economic vulnerability analysis.\n</p>\n</div>\n\n### 1. Data sources used in the app\n\n**Weather and air quality.** The app calls Open-Meteo weather and air-quality endpoints when available, and now cross-checks key meteorological fields with NASA POWER hourly data. Open-Meteo is used for current operational weather; NASA POWER is used as a satellite/reanalysis-backed validation layer for temperature, wind, humidity, precipitation, pressure and radiation. If an API call fails, safe fallback values are generated so the dashboard still runs. Weather variables include wind speed, precipitation, temperature, humidity, cloud cover, solar radiation and air-quality indicators.\n\n**Northern Powergrid outage data.** The app attempts to read public outage records from Northern Powergrid. If no geocoded outage record is available, the app may create synthetic map points for visual continuity. These points are now marked as synthetic and are not allowed to create live-mode warnings, failure escalation or fragile labels.\n\n**IoD/IMD socio-economic evidence.** IoD means Indices of Deprivation. IMD means Index of Multiple Deprivation. These datasets summarise relative deprivation across small areas using domains such as income, employment, education, health, crime, housing/services and living environment. In this app, values are converted onto a 0–100 scale, where a higher value means higher social vulnerability. If detailed IoD2025 files are not available, the app uses a transparent fallback based on local vulnerability proxies and population density.\n\n### 2. Live-mode warning correction\n\nA previous version could show warning, severe or fragile states in North East and Yorkshire even when observed weather was good. The main cause was that fallback outage markers and a fixed baseline ENS term could behave like real outage evidence. This version fixes that by separating synthetic outage points from real outage records, ignoring synthetic outages in live-mode scoring, setting live ENS to zero when no real outage and no affected customers are present, capping live risk under calm weather, and preventing calm live conditions from being labelled fragile unless real evidence exists.\n\n### 3. Main tabs\n\n**Executive overview** shows the regional intelligence table, risk/resilience gauges, location ranking and social-vulnerability relationship. **Simulation** provides an animated operational weather view. **Natural hazards** compares postcode resilience across wind, flood, drought, heat/air-quality stress and compound hazard. **IoD2025 socio-economic evidence** explains deprivation data matching. **Spatial intelligence** shows a colourful North East/Yorkshire regional risk mosaic, map-based risk, infrastructure and outage overlays with legends. **Resilience** shows resilience rankings. **Failure & investment** combines failure probability and investment actions. **Scenario losses** compares what-if stress scenarios. **Finance & funding** combines loss modelling and funding prioritisation. **Monte Carlo** keeps only the improved simulation model under the simple name Monte Carlo. **Validation / black-box** documents transparency checks. **README** explains the model. **Data / Export** exposes output tables.\n\n### 4. Core formulae\n\n**Weather risk component**\n\n`weather_score = wind + rain + persistent_rain + cloud + cold + heat + humidity`, where rain starts affecting risk from light rain rather than being ignored until heavy rain.\n\n**Pollution and public-health stress**\n\n`pollution_score = 17×clip(AQI/100) + 9×clip(PM2.5/60)`\n\n**Renewable generation proxy**\n\n`solar_MW = shortwave_radiation × 0.18`\n\n`wind_MW = min((wind_speed/12)^3, 1.20) × 95`\n\nThe wind term follows the cubic character of wind-power availability before rated output. It is a simplified proxy, not a turbine-specific engineering model.\n\n**Energy Not Supplied (ENS)**\n\n`ENS_MW = (100×outage_count + 0.014×affected_customers + base_load_component) × scenario_outage_multiplier`\n\nIn live mode, when there are no real outages and no affected customers, the base load component is zero. This prevents normal demand from being misclassified as unserved energy.\n\n**Failure probability**\n\n`failure_probability = 1 / (1 + exp(-0.065 × (risk_score − 60)))`\n\nThis logistic function converts risk into a probability-like value. Scores near 60 sit near the transition zone; low risk remains low probability, while high risk rises non-linearly.\n\n**Cascade stress**\n\n`water = power^1.35 × 0.74`\n\n`telecom = power^1.22 × 0.82`\n\n`transport = ((power + telecom)/2) × 0.70`\n\n`social = ((power + water + telecom)/3) × 0.75`\n\n**Resilience index**\n\n`resilience = 100 − (0.42×risk + 0.20×social_vulnerability + 17×grid_failure + 10×renewable_failure + 12×system_stress + finance_penalty)`\n\nA high score means the place is more robust. A low score means the area is stressed or fragile. The finance penalty is capped so one very large value does not dominate all other factors.\n\n**Social vulnerability**\n\n`social_vulnerability = 40×clip(population_density/4500) + 60×clip(IMD_score/100)`\n\nWhen IoD domain data are available, the app blends domain vulnerability with this fallback score. The aim is to represent that a technically similar outage may have a larger human impact in a more deprived or densely populated area.\n\n**Financial loss**\n\n`total_loss = VoLL_loss + customer_interruption_loss + business_disruption_loss + restoration_loss + critical_services_loss`\n\n`VoLL_loss = ENS_MWh × £17,000/MWh`\n\n`customer_interruption_loss = affected_customers × £38`\n\n`business_disruption_loss = ENS_MWh × £1,100 × business_density`\n\n`restoration_loss = outage_count × £18,500`\n\n`critical_services_loss = ENS_MWh × £320 × social_vulnerability_fraction`\n\nThese figures are scenario assumptions and should be calibrated with local regulatory or utility data before operational use.\n\n**Investment recommendation score**\n\n`recommendation = 0.30×risk + 0.22×social_vulnerability + 0.18×(100−resilience) + 0.13×loss_percentile + 0.10×ENS_percentile + 0.07×outage_pressure`\n\n**Funding priority score**\n\n`funding = 0.26×risk + 0.20×(100−resilience) + 0.18×social_vulnerability + 0.15×loss_exposure + 0.11×ENS_exposure + 0.06×outage_exposure + 0.04×recommendation`\n\n**Monte Carlo model**\n\nThe Monte Carlo model uses a shared storm shock so wind, rain, outage count and ENS move together. It also uses triangular demand uncertainty and lognormal restoration-cost tails. Outputs include mean risk, P95 risk, mean failure probability, P95 failure probability, mean loss, P95 loss and CVaR95 loss.\n\n### 5. Colour legend\n\nGreen means low risk or robust resilience. Yellow means moderate watch-level stress. Orange means high warning-level stress. Red means severe risk or fragile resilience. The dashboard displays legends near regional risk visuals so users can understand what the colours mean.\n\n### 6. Important limitations\n\nThis is a research-grade prototype, not an official operational control system. Weather APIs, outage APIs and socio-economic files may be incomplete or unavailable. All scoring weights are transparent assumptions and should be calibrated with historical outage, asset, feeder, substation, customer-minute-lost and restoration-cost data before production use.\n\n### 7. References for the modelling logic\n\n[1] Ofgem RIIO electricity-distribution resilience and interruption reporting frameworks.  \n[2] UK Department for Energy Security and Net Zero value-of-lost-load and electricity-security appraisal evidence.  \n[3] English Indices of Deprivation technical reports for IMD/IoD domain interpretation.  \n[4] Open-Meteo weather and air-quality API documentation for meteorological variables.  \n[5] Northern Powergrid open-data documentation for live power-cut records.  \n[6] Billinton and Allan, *Reliability Evaluation of Power Systems*, for reliability and interruption-impact modelling.  \n[7] Panteli and Mancarella resilience literature for weather-driven power-system resilience concepts.  \n[8] Lund and Kempton vehicle-to-grid literature for EV/V2G support concepts.  \n[9] IEC/IEEE power-system dependability and resilience guidance.\n', unsafe_allow_html=True)
 
 def main() -> None:
     st.markdown(APP_CSS, unsafe_allow_html=True)
