@@ -213,6 +213,8 @@ def hazard_resilience_score(
 
     aqi = safe_float(row.get("european_aqi"))
 
+    temp = safe_float(row.get("temperature_2m"))
+
     risk = safe_float(row.get("final_risk_score"))
 
     # =========================================================
@@ -241,6 +243,8 @@ def hazard_resilience_score(
         and aqi < 60
         and outage < 2
     )
+
+    cold_weather = temp < 6
 
     # =========================================================
     # BASE RESILIENCE
@@ -592,6 +596,7 @@ def enhanced_failure_probability(
     wind = safe_float(row.get("wind_speed_10m"))
     rain = safe_float(row.get("precipitation"))
     aqi = safe_float(row.get("european_aqi"))
+    temp = safe_float(row.get("temperature_2m"))
 
     risk = safe_float(row.get("final_risk_score"))
 
@@ -614,6 +619,8 @@ def enhanced_failure_probability(
     rain_n = clamp(rain / 40, 0, 1)
 
     aqi_n = clamp(aqi / 150, 0, 1)
+
+    cold_n = clamp((6 - temp) / 12, 0, 1)
 
     risk_n = clamp(risk / 100, 0, 1)
 
@@ -658,6 +665,9 @@ def enhanced_failure_probability(
         # social vulnerability
         + 0.45 * social_n
 
+        # winter/cold-load pressure
+        + 0.85 * cold_n
+
         # outage clustering
         + 0.38 * outage_n
 
@@ -687,11 +697,20 @@ def enhanced_failure_probability(
     # =========================================================
 
     if calm_weather:
-        prob *= 0.35
-        prob = min(prob, 0.18)
+        # Do not over-suppress failure probability under cold but otherwise calm
+        # conditions. Cold weather increases load and repair complexity, so a
+        # 1–2% result is too optimistic for a regional resilience prototype.
+        if cold_weather:
+            prob *= 0.78
+            prob = max(prob, 0.055 + 0.035 * cold_n)
+            prob = min(prob, 0.28)
+        else:
+            prob *= 0.55
+            prob = max(prob, 0.025)
+            prob = min(prob, 0.18)
 
     # hard operational realism constraints
-    prob = clamp(prob, 0.01, 0.95)
+    prob = clamp(prob, 0.02, 0.95)
 
     # =========================================================
     # FAILURE CLASSIFICATION
@@ -733,6 +752,9 @@ def enhanced_failure_probability(
     if renewable >= 0.60:
         drivers.append("renewable intermittency")
 
+    if cold_n > 0.15:
+        drivers.append("cold-weather demand and repair stress")
+
     if not drivers:
         drivers.append("normal operational conditions")
 
@@ -755,6 +777,7 @@ def enhanced_failure_probability(
             f"renewable={round(renewable,3)}, "
             f"social={round(social,1)}, "
             f"hazard={round(hazard_stress,1)}, "
+            f"temperature={round(temp,1)}°C, "
             f"outages={int(outage)}, "
             f"ENS={round(ens,1)} MW"
         ),
@@ -2998,7 +3021,15 @@ def compute_multilayer_risk(row: Dict[str, Any], outage_intensity: float, ens_mw
     wind_score = clamp((wind - 18) / 52, 0, 1) * 24
     rain_score = clamp((rain - 1.5) / 23.5, 0, 1) * 20
     cloud_score = clamp((cloud - 75) / 25, 0, 1) * 3
-    temp_score = clamp(max(abs(temp - 18) - 10, 0) / 18, 0, 1) * 8
+
+    # Cold weather matters even when wind and rain are calm: low temperature
+    # increases winter demand, transformer loading, icing/fragility risk and
+    # restoration difficulty. The previous version under-weighted this effect,
+    # which could produce unrealistically low failure probabilities such as 1–2%.
+    cold_score = clamp((6 - temp) / 12, 0, 1) * 15
+    heat_score = clamp((temp - 26) / 12, 0, 1) * 10
+    temp_score = max(cold_score, heat_score)
+
     humidity_score = clamp((humidity - 88) / 12, 0, 1) * 2
 
     weather_score = wind_score + rain_score + cloud_score + temp_score + humidity_score
@@ -3017,15 +3048,38 @@ def compute_multilayer_risk(row: Dict[str, Any], outage_intensity: float, ens_mw
 
     score = clamp(weather_score + pollution_score + load_score + outage_score + ens_score, 0, 100)
 
-    # Live calm-weather guard: prevents false emergency outputs when weather is good.
-    if is_calm_live_weather(row, row.get("nearby_outages_25km", 0), row.get("affected_customers_nearby", 0)):
-        score = min(score, 34.0)
+    # Live calm-weather guard: prevents false emergency outputs when weather is good,
+    # but does not erase winter/cold-load stress. A cold clear day is not the same
+    # as a warm benign operating state.
+    calm_live = is_calm_live_weather(row, row.get("nearby_outages_25km", 0), row.get("affected_customers_nearby", 0))
+    if calm_live:
+        score = min(score, 42.0 if temp < 6 else 34.0)
 
-    failure_probability = 1 / (1 + np.exp(-0.075 * (score - 72)))
+    social_n = clamp(safe_float(row.get("social_vulnerability")) / 100, 0, 1)
+    outage_n = clamp(outage_intensity, 0, 1)
+    ens_n = clamp(ens_mw / 2500, 0, 1)
+    cold_n = clamp((6 - temp) / 12, 0, 1)
+
+    failure_logit = (
+        -2.75
+        + 0.045 * score
+        + 0.85 * cold_n
+        + 0.42 * social_n
+        + 0.65 * outage_n
+        + 0.50 * ens_n
+    )
+    failure_probability = 1 / (1 + np.exp(-failure_logit))
+
+    # Operational floor: even under good weather, winter loading and latent asset
+    # fragility mean the probability should not collapse to nearly zero.
+    if calm_live and temp < 6:
+        failure_probability = max(failure_probability, 0.055 + 0.025 * cold_n)
+    elif calm_live:
+        failure_probability = max(failure_probability, 0.025)
 
     return {
         "risk_score": round(float(score), 2),
-        "failure_probability": round(float(clamp(failure_probability, 0.01, 0.80)), 3),
+        "failure_probability": round(float(clamp(failure_probability, 0.02, 0.85)), 3),
         "renewable_generation_mw": round(float(renewable_mw), 2),
         "net_load_mw": round(float(net_load), 2),
     }
@@ -5087,16 +5141,45 @@ def bbc_tab(region: str, scenario: str, places: pd.DataFrame, grid: pd.DataFrame
 
 
 
+UK_ATLAS_REGION_PALETTE = [
+    "#66c2a5",  # teal-green
+    "#8dd3c7",  # aqua
+    "#80b1d3",  # sky blue
+    "#bebada",  # lavender
+    "#fb8072",  # coral
+    "#fdb462",  # warm orange
+    "#ffff99",  # soft yellow
+    "#b3de69",  # light green
+    "#fccde5",  # pink
+    "#bc80bd",  # purple
+    "#ccebc5",  # mint
+    "#ffed6f",  # gold
+]
+
+
+def atlas_region_colour(name: str, postcode: str = "") -> str:
+    """Return a stable UK-atlas style colour for a named regional unit.
+
+    The user requested the Spatial Intelligence map to resemble a colourful UK
+    regional map rather than a risk heatmap or synthetic pentagon/hexagon grid.
+    This palette is therefore categorical and stable by area name. Risk is still
+    shown in hover text, labels, tables and line emphasis.
+    """
+    key = f"{name}|{postcode}"
+    idx = sum(ord(ch) for ch in key) % len(UK_ATLAS_REGION_PALETTE)
+    return UK_ATLAS_REGION_PALETTE[idx]
+
+
 def regional_risk_palette(score: float) -> str:
-    """Bright categorical palette for the regional partition map."""
+    """Legacy risk palette retained for charts that still need risk colours."""
     score = safe_float(score)
     if score >= 85:
-        return "#d80073"   # magenta / severe
+        return "#d80073"
     if score >= 65:
-        return "#ff9700"   # orange / high
+        return "#ff9700"
     if score >= 40:
-        return "#0070c0"   # blue / moderate
-    return "#7bd000"       # green / low
+        return "#4f9ddf"
+    return "#66c2a5"
 
 
 def make_place_cell_geojson(places: pd.DataFrame, region: str) -> Dict[str, Any]:
@@ -5153,7 +5236,7 @@ def make_place_cell_geojson(places: pd.DataFrame, region: str) -> Dict[str, Any]
                 "resilience": round(res, 2),
                 "failure_probability": round(fail * 100, 1),
                 "ens": round(ens, 2),
-                "colour": regional_risk_palette(risk),
+                "colour": atlas_region_colour(str(row.get("place", "Unknown")), str(row.get("postcode_prefix", ""))),
             },
         })
 
@@ -5242,7 +5325,7 @@ def build_colourful_region_geojson(region: str, places: pd.DataFrame) -> Dict[st
             "ens": round(ens, 2),
             "social_vulnerability": round(social, 2),
             "flood_depth_proxy": round(flood, 3),
-            "colour": regional_risk_palette(risk),
+            "colour": atlas_region_colour(str(row.get("place", "Unknown")), str(row.get("postcode_prefix", ""))),
         })
         features.append(cloned)
 
@@ -5288,8 +5371,8 @@ def render_colourful_region_polygon_map(region: str, places: pd.DataFrame, title
                 mode="lines",
                 fill="toself",
                 fillcolor=str(props.get("colour", "#94a3b8")),
-                line=dict(width=2.2, color="rgba(255,255,255,0.86)"),
-                opacity=0.88,
+                line=dict(width=2.6, color=regional_risk_palette(safe_float(props.get("risk", 0)))),
+                opacity=0.90,
                 text=[hover] * len(lons),
                 hoverinfo="text",
                 name=str(props.get("region_unit", "Region")),
@@ -5619,9 +5702,10 @@ def spatial_tab(
         """
         <div class="note">
         <b>Spatial Intelligence update:</b> the main map now uses regional polygons
-        coloured by operational risk. The previous synthetic dense surface/tiling
-        layer has been removed from this tab so the visual output no longer appears
-        as pentagon or hexagon cells.
+        coloured with a UK-atlas style categorical palette, similar to the reference figure.
+        Risk is still retained in the border colour, hover evidence, KPIs and tables.
+        The previous synthetic dense surface/tiling layer has been removed, so the visual
+        output no longer appears as pentagon or hexagon cells.
         </div>
         """,
         unsafe_allow_html=True,
