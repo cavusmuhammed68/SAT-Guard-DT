@@ -4523,34 +4523,181 @@ def _build_authority_risk_lookup(
 # (matches the political-map style in the reference image)
 # ---------------------------------------------------------------------------
 
-NORTHEAST_PALETTE: Dict[str, str] = {
-    "Northumberland":           "#aed6f1",   # light blue
-    "Newcastle / Gateshead":    "#a9dfbf",   # light green
-    "Sunderland":               "#f9e79f",   # light yellow
-    "County Durham":            "#f5cba7",   # light orange
-    "Teesside":                 "#d7bde2",   # light purple
-}
-
-YORKSHIRE_PALETTE: Dict[str, str] = {
-    "North Yorkshire":          "#aed6f1",   # light blue
-    "Leeds / Bradford":         "#a9dfbf",   # light green
-    "Sheffield / Rotherham":    "#f9e79f",   # light yellow
-    "Hull / East Riding":       "#f5cba7",   # light orange / peach
-}
-
-REGION_PALETTES: Dict[str, Dict[str, str]] = {
-    "North East": NORTHEAST_PALETTE,
-    "Yorkshire":  YORKSHIRE_PALETTE,
-}
+# =============================================================================
+# SAT-Guard — Regional Grid Intelligence Map  (VORONOI RISK EDITION)
+# REPLACEMENT for render_political_intelligence_map and regional_intelligence_tab
+#
+# Design:
+#   - Each DISTRICT polygon is tessellated into sub-regions using Voronoi
+#     based on the place coordinates inside that district
+#   - Each sub-region is coloured by its place's RISK SCORE (pastel scale)
+#   - Single-place districts get the whole polygon in that place's risk colour
+#   - District BOUNDARIES drawn thick and dark (atlas style)
+#   - District names UPPERCASE at centroid (dark text on pastel background)
+#   - City red dots + name labels
+#   - Light basemap (carto-positron) — colours pop on white background
+# =============================================================================
 
 
-def _risk_badge_colour(risk_val: float) -> str:
-    """Return a small coloured badge hex for the risk legend strip."""
-    s = safe_float(risk_val)
-    if s >= 75: return "#e74c3c"
-    if s >= 55: return "#e67e22"
-    if s >= 35: return "#f1c40f"
-    return "#27ae60"
+def risk_pastel_hex(score: float) -> str:
+    """
+    Return a pastel risk colour for postcode sub-regions.
+
+    Softer than the standard risk palette to maintain political-map
+    aesthetics while clearly showing risk variation across sub-regions.
+
+    Scale:
+        0–34:  soft green  #a8d8a8  (Low)
+        35–54: soft yellow #f9e4a0  (Moderate)
+        55–74: soft orange #f4b07a  (High)
+        75–100:soft red    #f08080  (Severe)
+    """
+    s = safe_float(score)
+    if s >= 75: return "#f08080"
+    if s >= 55: return "#f4b07a"
+    if s >= 35: return "#f9e4a0"
+    return "#a8d8a8"
+
+
+def _voronoi_sub_regions(
+    district_coords: List[List[float]],
+    place_points: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Tessellate a district polygon into sub-regions using Voronoi.
+
+    Each sub-region is assigned to the nearest place point.
+    The Voronoi diagram is clipped to the district boundary polygon.
+
+    Args:
+        district_coords: list of [lon, lat] forming a closed polygon
+        place_points: list of dicts with keys: lon, lat, name, risk, ...
+
+    Returns:
+        list of dicts: {
+            "name":     place name,
+            "risk":     risk score,
+            "lons":     polygon longitude list,
+            "lats":     polygon latitude list,
+            "centroid": [lon, lat],
+        }
+
+    If only one place or Voronoi fails, returns the full district as one region.
+    """
+    try:
+        from scipy.spatial import Voronoi
+        from shapely.geometry import Polygon, LineString, MultiPolygon
+        from shapely.ops import unary_union, polygonize
+        import numpy as np
+
+        district_poly = Polygon([(c[0], c[1]) for c in district_coords])
+
+        if len(place_points) == 1:
+            # Single place — whole district gets that place's risk colour
+            coords = list(district_poly.exterior.coords)
+            return [{
+                "name":     place_points[0]["name"],
+                "risk":     place_points[0]["risk"],
+                "lons":     [c[0] for c in coords],
+                "lats":     [c[1] for c in coords],
+                "centroid": [district_poly.centroid.x, district_poly.centroid.y],
+            }]
+
+        pts   = np.array([[p["lon"], p["lat"]] for p in place_points])
+        names = [p["name"] for p in place_points]
+
+        # Mirror points to close the infinite Voronoi regions
+        bbox = district_poly.bounds
+        far  = 4.0
+        mirror = np.array([
+            [bbox[0]-far, bbox[1]-far],
+            [bbox[2]+far, bbox[1]-far],
+            [bbox[0]-far, bbox[3]+far],
+            [bbox[2]+far, bbox[3]+far],
+        ])
+        all_pts = np.vstack([pts, mirror])
+        vor     = Voronoi(all_pts)
+        center  = all_pts.mean(axis=0)
+
+        # Build ridge lines (finite + semi-infinite)
+        lines = []
+        for pointidx, simplex in zip(vor.ridge_points, vor.ridge_vertices):
+            simplex = np.asarray(simplex)
+            if -1 not in simplex:
+                lines.append(LineString(vor.vertices[simplex]))
+            else:
+                i = simplex[simplex >= 0][0]
+                t = all_pts[pointidx[1]] - all_pts[pointidx[0]]
+                t /= (np.linalg.norm(t) + 1e-12)
+                n = np.array([-t[1], t[0]])
+                mp = all_pts[pointidx].mean(axis=0)
+                far_pt = vor.vertices[i] + np.sign(np.dot(mp - center, n)) * n * 10
+                lines.append(LineString([vor.vertices[i], far_pt]))
+
+        result_polys = list(polygonize(lines))
+        sub: Dict[str, List] = {nm: [] for nm in names}
+
+        for poly in result_polys:
+            clipped = poly.intersection(district_poly)
+            if clipped.is_empty:
+                continue
+            centroid_pt = np.array([poly.centroid.x, poly.centroid.y])
+            dists       = np.linalg.norm(pts - centroid_pt, axis=1)
+            nearest_idx = int(np.argmin(dists))
+            sub[names[nearest_idx]].append(clipped)
+
+        output = []
+        for p in place_points:
+            nm     = p["name"]
+            polys  = sub.get(nm, [])
+            if not polys:
+                continue
+            merged = unary_union(polys)
+            # Handle both Polygon and MultiPolygon
+            geom_list = (
+                list(merged.geoms)
+                if isinstance(merged, MultiPolygon)
+                else [merged]
+            )
+            for geom in geom_list:
+                coords_out = list(geom.exterior.coords)
+                output.append({
+                    "name":     nm,
+                    "risk":     p["risk"],
+                    "resilience": p.get("resilience", 0),
+                    "gf":       p.get("gf", 0),
+                    "ens":      p.get("ens", 0),
+                    "loss":     p.get("loss", 0),
+                    "social":   p.get("social", 0),
+                    "lons":     [c[0] for c in coords_out],
+                    "lats":     [c[1] for c in coords_out],
+                    "centroid": [geom.centroid.x, geom.centroid.y],
+                })
+
+        return output if output else [{
+            "name": place_points[0]["name"],
+            "risk": place_points[0]["risk"],
+            "lons": [c[0] for c in district_coords],
+            "lats": [c[1] for c in district_coords],
+            "centroid": [
+                float(np.mean([c[0] for c in district_coords])),
+                float(np.mean([c[1] for c in district_coords])),
+            ],
+        }]
+
+    except Exception:
+        # Fallback: single polygon with mean risk
+        mean_risk = float(np.mean([p["risk"] for p in place_points]))
+        return [{
+            "name":     place_points[0]["name"],
+            "risk":     mean_risk,
+            "lons":     [c[0] for c in district_coords],
+            "lats":     [c[1] for c in district_coords],
+            "centroid": [
+                float(np.mean([c[0] for c in district_coords])),
+                float(np.mean([c[1] for c in district_coords])),
+            ],
+        }]
 
 
 def render_political_intelligence_map(
@@ -4558,128 +4705,165 @@ def render_political_intelligence_map(
     places: pd.DataFrame,
 ) -> None:
     """
-    Render a political-style regional grid intelligence map.
+    Render a political-style regional grid intelligence map
+    with VORONOI-TESSELLATED postcode-level risk colouring.
 
-    Visual design (matches the reference image style):
+    Visual design:
     ─────────────────────────────────────────────────────
-    • BACKGROUND:   carto-positron (white/light grey roads/water)
-    • POLYGONS:     each district filled with a distinct pastel colour
-                    (not risk-coded — distinct colour per district so the
-                     map is immediately readable as a political/admin map)
-    • BOUNDARIES:   dark (#2c3e50) 2.5px lines between districts
-    • DISTRICT NAMES: UPPERCASE bold text at polygon centroid
-    • CITY MARKERS: dark red filled circles (⬤) + city name labels
-    • HOVER:        risk score, resilience, grid failure %, ENS, financial loss
-    • LEGEND:       inline risk legend strip below the map
+    BACKGROUND:    carto-positron (light atlas basemap)
+    SUB-REGIONS:   each place's Voronoi cell inside its district is
+                   coloured by that place's RISK SCORE (pastel scale):
+                       soft green  = Low    (0–34)
+                       soft yellow = Moderate (35–54)
+                       soft orange = High   (55–74)
+                       soft red    = Severe (75–100)
+    BOUNDARIES:    thick dark #2c3e50 lines per district (political atlas style)
+    DISTRICT NAMES: UPPERCASE bold at district centroid
+    CITY MARKERS:  dark red dots + city name labels
+    HOVER:         per-postcode risk, resilience, grid failure %, ENS, loss
     """
-    center  = REGIONS[region]["center"]
-    polygons= REGIONS[region].get("authority_polygons", {})
-    palette = REGION_PALETTES.get(region, {})
-    risk_lkp= _build_authority_risk_lookup(places, region)
+    center   = REGIONS[region]["center"]
+    polygons = REGIONS[region].get("authority_polygons", {})
+    risk_lkp = _build_authority_risk_lookup(places, region)
+
+    # Build a place-level lookup: place_name → model outputs
+    place_lookup: Dict[str, Dict[str, float]] = {}
+    for _, row in places.iterrows():
+        nm = str(row.get("place", ""))
+        place_lookup[nm] = {
+            "lon":        safe_float(row.get("lon")),
+            "lat":        safe_float(row.get("lat")),
+            "risk":       safe_float(row.get("final_risk_score")),
+            "resilience": safe_float(row.get("resilience_index")),
+            "gf":         safe_float(row.get("grid_failure_probability")),
+            "ens":        safe_float(row.get("energy_not_supplied_mw")),
+            "loss":       safe_float(row.get("total_financial_loss_gbp")),
+            "social":     safe_float(row.get("social_vulnerability")),
+        }
 
     fig = go.Figure()
 
-    # ── Layer 1: Filled district polygons ────────────────────────────────
+    # Track district centroids for name labels and boundary outlines
+    district_centroids: List[Dict[str, Any]] = []
+    district_outlines:  List[Dict[str, Any]] = []
+
     for auth_name, auth_cfg in polygons.items():
-        coords = auth_cfg.get("coords", [])
+        coords     = auth_cfg.get("coords", [])
+        auth_places= auth_cfg.get("places", [])
         if not coords:
             continue
 
-        lons_p = [c[0] for c in coords]
-        lats_p = [c[1] for c in coords]
+        # Collect place data for this district
+        place_pts: List[Dict[str, Any]] = []
+        for pname in auth_places:
+            if pname in place_lookup:
+                pl = place_lookup[pname]
+                place_pts.append({
+                    "name":      pname,
+                    "lon":       pl["lon"],
+                    "lat":       pl["lat"],
+                    "risk":      pl["risk"],
+                    "resilience":pl["resilience"],
+                    "gf":        pl["gf"],
+                    "ens":       pl["ens"],
+                    "loss":      pl["loss"],
+                    "social":    pl["social"],
+                })
 
-        fill_colour = palette.get(auth_name, "#d5d8dc")   # grey fallback
+        if not place_pts:
+            # No configured places for this district — use mean risk
+            stats    = risk_lkp.get(auth_name, {})
+            mean_risk= stats.get("mean_risk", 30.0)
+            cx = float(np.mean([c[0] for c in coords]))
+            cy = float(np.mean([c[1] for c in coords]))
+            place_pts = [{"name": auth_name, "lon": cx, "lat": cy,
+                          "risk": mean_risk, "resilience": 70, "gf": 0.01,
+                          "ens": 0, "loss": 0, "social": 30}]
 
-        stats     = risk_lkp.get(auth_name, {})
-        risk_val  = stats.get("mean_risk",       float(places["final_risk_score"].mean()))
-        res_val   = stats.get("mean_resilience", float(places["resilience_index"].mean()))
-        ens_val   = stats.get("total_ens",       0.0)
-        loss_val  = stats.get("total_loss",      0.0)
-        soc_val   = stats.get("mean_social",     0.0)
-        gf_val    = stats.get("mean_gf",         0.0)
+        # ── Tessellate district → sub-regions (Voronoi) ───────────────────
+        sub_regions = _voronoi_sub_regions(coords, place_pts)
 
-        risk_badge = _risk_badge_colour(risk_val)
+        for sub in sub_regions:
+            fill_colour = risk_pastel_hex(sub["risk"])
+            tooltip = (
+                f"<b>{sub['name']}</b> ({auth_name})<br>"
+                f"Risk: <b>{round(sub['risk'],1)}/100</b> — {risk_label(sub['risk'])}<br>"
+                f"Resilience: {round(sub.get('resilience',0),1)}/100<br>"
+                f"Grid failure: {round(sub.get('gf',0)*100,2)}%<br>"
+                f"ENS: {round(sub.get('ens',0),1)} MW<br>"
+                f"Financial loss: {money_m(sub.get('loss',0))}<br>"
+                f"Social vulnerability: {round(sub.get('social',0),1)}/100"
+            )
 
-        tooltip = (
-            f"<b style='font-size:14px;'>{auth_name}</b><br>"
-            f"<span style='color:{risk_badge};'>●</span> "
-            f"<b>Risk: {round(risk_val,1)}/100</b> — {risk_label(risk_val)}<br>"
-            f"Resilience: {round(res_val,1)}/100 — {resilience_label(res_val)}<br>"
-            f"Grid failure: {round(gf_val*100,2)}%<br>"
-            f"ENS: {round(ens_val,1)} MW<br>"
-            f"Financial loss: {money_m(loss_val)}<br>"
-            f"Social vulnerability: {round(soc_val,1)}/100"
-        )
+            fig.add_trace(go.Scattermapbox(
+                lon       = sub["lons"],
+                lat       = sub["lats"],
+                mode      = "lines",
+                fill      = "toself",
+                fillcolor = fill_colour,
+                line      = dict(width=0.5, color="#7f8c8d"),  # thin inner edge
+                opacity   = 0.90,
+                text      = [tooltip] * len(sub["lons"]),
+                hoverinfo = "text",
+                name      = f"{sub['name']} — {risk_label(sub['risk'])}",
+                showlegend= True,
+            ))
 
+        # Store district boundary + centroid for later layers
+        cx = float(np.mean([c[0] for c in coords]))
+        cy = float(np.mean([c[1] for c in coords]))
+        district_centroids.append({"name": auth_name, "lon": cx, "lat": cy})
+        district_outlines.append({
+            "lons": [c[0] for c in coords],
+            "lats": [c[1] for c in coords],
+        })
+
+    # ── Layer 2: District boundary outlines (thick dark lines) ────────────
+    # Drawn OVER the sub-regions to give the political-atlas thick border look
+    for outline in district_outlines:
         fig.add_trace(go.Scattermapbox(
-            lon       = lons_p,
-            lat       = lats_p,
+            lon       = outline["lons"],
+            lat       = outline["lats"],
             mode      = "lines",
-            fill      = "toself",
-            fillcolor = fill_colour,
-            line      = dict(width=2.5, color="#2c3e50"),   # dark boundary
-            opacity   = 0.88,
-            text      = [tooltip] * len(lons_p),
-            hoverinfo = "text",
-            name      = auth_name,
-            showlegend= True,
+            line      = dict(width=3.0, color="#2c3e50"),
+            opacity   = 1.0,
+            hoverinfo = "skip",
+            showlegend= False,
         ))
 
-    # ── Layer 2: District name labels (UPPERCASE, bold, at centroid) ──────
-    for auth_name, auth_cfg in polygons.items():
-        coords = auth_cfg.get("coords", [])
-        if not coords:
-            continue
-
-        cx  = float(np.mean([c[0] for c in coords]))
-        cy  = float(np.mean([c[1] for c in coords]))
-        # Use UPPERCASE district name, like in a political atlas
-        label_text = auth_name.upper()
-
-        # Risk value for text colour decision
-        stats    = risk_lkp.get(auth_name, {})
-        risk_val = stats.get("mean_risk", 0.0)
-        text_col = "#1a252f"   # near-black on pastel background
-
+    # ── Layer 3: District name labels (UPPERCASE, dark, at centroid) ──────
+    for dc in district_centroids:
         fig.add_trace(go.Scattermapbox(
-            lon  = [cx],
-            lat  = [cy],
-            mode = "text",
-            text = [label_text],
-            textfont = dict(size=11, color=text_col),
-            hoverinfo  = "skip",
-            showlegend = False,
+            lon       = [dc["lon"]],
+            lat       = [dc["lat"]],
+            mode      = "text",
+            text      = [dc["name"].upper()],
+            textfont  = dict(size=11, color="#1a252f"),
+            hoverinfo = "skip",
+            showlegend= False,
         ))
 
-    # ── Layer 3: City dot markers (dark red, like atlas style) ────────────
+    # ── Layer 4: City red dot markers + labels ────────────────────────────
     city_lats  = places["lat"].tolist()
     city_lons  = places["lon"].tolist()
     city_names = places["place"].tolist()
     city_risks = [safe_float(r) for r in places["final_risk_score"].tolist()]
     city_gfs   = [safe_float(g) for g in places["grid_failure_probability"].tolist()]
     city_res   = [safe_float(r) for r in places["resilience_index"].tolist()]
-    city_ens   = [safe_float(e) for e in places["energy_not_supplied_mw"].tolist()]
 
     city_hover = [
         f"<b>● {n}</b><br>"
         f"Risk: {round(r,1)}/100 — {risk_label(r)}<br>"
         f"Resilience: {round(res,1)}/100<br>"
-        f"Grid failure: {round(gf*100,2)}%<br>"
-        f"ENS: {round(ens,1)} MW"
-        for n, r, res, gf, ens in zip(
-            city_names, city_risks, city_res, city_gfs, city_ens
-        )
+        f"Grid failure: {round(gf*100,2)}%"
+        for n, r, res, gf in zip(city_names, city_risks, city_res, city_gfs)
     ]
 
     fig.add_trace(go.Scattermapbox(
         lon          = city_lons,
         lat          = city_lats,
         mode         = "markers+text",
-        marker       = dict(
-            size     = 10,
-            color    = "#c0392b",        # dark red dot (atlas style)
-            opacity  = 1.0,
-        ),
+        marker       = dict(size=9, color="#c0392b", opacity=1.0),
         text         = city_names,
         textposition = "top right",
         textfont     = dict(size=11, color="#1a252f"),
@@ -4692,26 +4876,29 @@ def render_political_intelligence_map(
     # ── Layout ────────────────────────────────────────────────────────────
     fig.update_layout(
         mapbox=dict(
-            style  = "carto-positron",       # light atlas-style basemap
+            style  = "carto-positron",
             center = {"lat": center["lat"], "lon": center["lon"]},
             zoom   = center["zoom"] + 0.2,
         ),
-        height = 650,
-        margin = dict(l=0, r=0, t=50, b=0),
+        height = 660,
+        margin = dict(l=0, r=0, t=55, b=0),
         title  = dict(
-            text  = f"⚡  {region} — Grid Risk Intelligence Map",
-            font  = dict(size=18, color="#1a252f"),
-            x     = 0.5,
+            text    = f"⚡  {region} — Grid Risk Intelligence Map",
+            font    = dict(size=17, color="#1a252f"),
+            x       = 0.5,
             xanchor = "center",
         ),
         legend = dict(
-            bgcolor      = "rgba(255,255,255,0.92)",
-            font         = dict(color="#1a252f", size=11),
-            orientation  = "v",
+            bgcolor     = "rgba(255,255,255,0.92)",
+            font        = dict(color="#1a252f", size=11),
+            orientation = "v",
             x=0.01, y=0.99,
-            bordercolor  = "#bdc3c7",
-            borderwidth  = 1,
-            title        = dict(text="District", font=dict(size=12, color="#1a252f")),
+            bordercolor = "#bdc3c7",
+            borderwidth = 1,
+            title       = dict(
+                text = "Postcode risk zone",
+                font = dict(size=12, color="#1a252f"),
+            ),
         ),
         paper_bgcolor = "#f8f9fa",
         font = dict(color="#1a252f"),
@@ -4719,32 +4906,32 @@ def render_political_intelligence_map(
 
     st.plotly_chart(fig, use_container_width=True)
 
-    # ── Risk legend strip (colour-coded, below map) ───────────────────────
-    # District colours above are for identification, NOT risk coding.
-    # This strip explains the risk dot colours in tooltips.
+    # ── Risk colour legend ────────────────────────────────────────────────
     st.markdown(
         """
         <div style="
-            background:white;
-            border:1px solid #bdc3c7;
-            border-radius:10px;
-            padding:12px 16px;
-            margin-top:4px;
-            color:#1a252f;
-            font-size:13px;
+            background:white;border:1px solid #bdc3c7;border-radius:10px;
+            padding:12px 16px;margin-top:4px;color:#1a252f;font-size:13px;
         ">
-        <b>Risk scale (shown in hover tooltips):</b> &nbsp;&nbsp;
-        <span style="color:#27ae60;font-size:16px;">●</span>
-        <b>Low</b> (0–34) &nbsp;&nbsp;
-        <span style="color:#f1c40f;font-size:16px;">●</span>
-        <b>Moderate</b> (35–54) &nbsp;&nbsp;
-        <span style="color:#e67e22;font-size:16px;">●</span>
-        <b>High</b> (55–74) &nbsp;&nbsp;
-        <span style="color:#e74c3c;font-size:16px;">●</span>
-        <b>Severe</b> (75–100) &nbsp;&nbsp;
-        | &nbsp;&nbsp;
-        <span style="color:#c0392b;font-size:16px;">●</span>
-        <b>City location</b>
+        <b>Risk colour scale (each postcode zone coloured by its risk score):</b>
+        &nbsp;&nbsp;
+        <span style="background:#a8d8a8;padding:3px 10px;border-radius:4px;
+                     border:1px solid #ccc;">Low (0–34)</span>
+        &nbsp;
+        <span style="background:#f9e4a0;padding:3px 10px;border-radius:4px;
+                     border:1px solid #ccc;">Moderate (35–54)</span>
+        &nbsp;
+        <span style="background:#f4b07a;padding:3px 10px;border-radius:4px;
+                     border:1px solid #ccc;">High (55–74)</span>
+        &nbsp;
+        <span style="background:#f08080;padding:3px 10px;border-radius:4px;
+                     border:1px solid #ccc;">Severe (75–100)</span>
+        &nbsp;&nbsp;|&nbsp;&nbsp;
+        <span style="color:#c0392b;font-size:15px;">●</span> City location
+        &nbsp;&nbsp;
+        <span style="display:inline-block;width:30px;height:3px;
+                     background:#2c3e50;vertical-align:middle;"></span>
+        District boundary
         </div>
         """,
         unsafe_allow_html=True,
@@ -4752,7 +4939,7 @@ def render_political_intelligence_map(
 
 
 # ---------------------------------------------------------------------------
-# REPLACEMENT spatial_tab  (renamed + redesigned)
+# REPLACEMENT regional_intelligence_tab
 # ---------------------------------------------------------------------------
 
 def regional_intelligence_tab(
@@ -4766,16 +4953,17 @@ def regional_intelligence_tab(
     """
     Regional Grid Intelligence tab.
 
-    Replaces the previous 'Spatial Intelligence' tab.
-    Shows a proper political-atlas style map with distinct pastel district
-    colours, dark boundaries, UPPERCASE district names and red city dots —
-    matching the style of the reference administrative map image.
+    Shows a political-atlas style map where:
+    - Each district is divided into postcode zones via Voronoi tessellation
+    - Each zone is coloured by its RISK SCORE on a pastel green→yellow→orange→red scale
+    - Thick dark district boundaries separate major areas
+    - UPPERCASE district names at centroids
+    - Red city dots with labels
 
-    Sections:
-      1. KPI strip
-      2. Political-style intelligence map (main visual)
-      3. Risk vs resilience analytics
-      4. Live outage map (when available)
+    Additional sections:
+    - Risk vs social vulnerability analytics
+    - Grid failure probability bar
+    - Live outage map overlay
     """
     st.subheader("🗺️ Regional Grid Intelligence Map")
 
@@ -4790,7 +4978,7 @@ def regional_intelligence_tab(
     if not df.empty:
         c1.metric("Highest risk area",
                   df.loc[df["final_risk_score"].idxmax(),  "place"])
-        c2.metric("Lowest resilience area",
+        c2.metric("Lowest resilience",
                   df.loc[df["resilience_index"].idxmin(), "place"])
     c3.metric("Grid failure range",
               f"{df['grid_failure_probability'].min()*100:.2f}%"
@@ -4798,7 +4986,7 @@ def regional_intelligence_tab(
     c4.metric("Total ENS",
               f"{df['energy_not_supplied_mw'].sum():.1f} MW")
 
-    # ── Main map ──────────────────────────────────────────────────────────
+    # ── Main political map ────────────────────────────────────────────────
     render_political_intelligence_map(region, df)
 
     st.markdown("---")
@@ -4818,7 +5006,7 @@ def regional_intelligence_tab(
             color_continuous_scale="RdYlGn_r",
             template=plotly_template(),
             title="Social vulnerability vs operational risk",
-            height=440,
+            height=420,
             labels={
                 "social_vulnerability": "Social vulnerability (0–100)",
                 "final_risk_score":     "Risk score (0–100)",
@@ -4828,26 +5016,28 @@ def regional_intelligence_tab(
         st.plotly_chart(fig_sc, use_container_width=True)
 
     with b:
-        # Grid failure bar — now shows realistic values
         gf_df = df[["place","grid_failure_probability","final_risk_score"]].copy()
-        gf_df["grid_failure_%"] = (gf_df["grid_failure_probability"]*100).round(3)
+        gf_df["grid_failure_%"] = (gf_df["grid_failure_probability"] * 100).round(3)
         fig_gf = px.bar(
             gf_df.sort_values("grid_failure_%", ascending=False),
             x="place",
             y="grid_failure_%",
             color="final_risk_score",
             color_continuous_scale="RdYlGn_r",
-            title="Grid failure probability by district (%)",
+            title="Grid failure probability by postcode (%)",
             template=plotly_template(),
-            height=440,
+            height=420,
             text="grid_failure_%",
-            labels={"grid_failure_%":"Grid failure (%)","final_risk_score":"Risk"},
+            labels={
+                "grid_failure_%":    "Grid failure (%)",
+                "final_risk_score":  "Risk score",
+            },
         )
         fig_gf.update_traces(texttemplate="%{text:.2f}%", textposition="outside")
-        fig_gf.update_layout(margin=dict(l=10,r=10,t=55,b=10))
+        fig_gf.update_layout(margin=dict(l=10, r=10, t=55, b=10))
         st.plotly_chart(fig_gf, use_container_width=True)
 
-    # ── Live outage map ───────────────────────────────────────────────────
+    # ── Live outage overlay ───────────────────────────────────────────────
     if outages is not None and not outages.empty:
         real_out = outages[~outages["is_synthetic_outage"]].copy()
         if not real_out.empty:
@@ -4877,7 +5067,7 @@ def regional_intelligence_tab(
             fig_out.update_layout(
                 paper_bgcolor="#f8f9fa",
                 font=dict(color="#1a252f"),
-                margin=dict(l=0,r=0,t=45,b=0),
+                margin=dict(l=0, r=0, t=45, b=0),
             )
             st.plotly_chart(fig_out, use_container_width=True)
 
