@@ -10345,16 +10345,525 @@ def _get_briefs() -> dict:
 
 
 
+
+# =============================================================================
+# FIGURE ZOOM + STEP ANIMATION SYSTEM
+# =============================================================================
+# Each figure (SVG) in the academic brief becomes clickable.
+# Clicking opens a full-panel modal with step-by-step calculation walkthrough.
+#
+# Architecture:
+#   _FIGURE_STEPS  — dict mapping tab_key → list of step dicts
+#   _MODAL_JS      — self-contained JS modal engine (vanilla JS, no deps)
+#   _wrap_svg_clickable(svg, tab_key) — wraps an SVG in a clickable container
+#   render_tab_brief() injects the modal HTML + calls _wrap_svg_clickable
+# =============================================================================
+
+_FIGURE_STEPS: dict = {
+
+    "overview": [
+        {"title": "Layer 1 — Weather (max 57 pts)",
+         "color": "#378ADD",
+         "formula": "weather_s = (wind−18)/52×24 + (rain−1.5)/23.5×20 + temp_pen×8 + humid_pen×2 + cloud_pen×3",
+         "explain": "Weather is the largest single driver — up to 57 of 100 risk points. Wind and rain dominate. Each variable is normalised to 0–1 then scaled. Below threshold (wind<18, rain<1.5) the contribution is zero — no false alarms in calm UK weather."},
+        {"title": "Layer 2 — Air quality (max 15 pts)",
+         "color": "#BA7517",
+         "formula": "pollution_s = clip((AQI−55)/95, 0,1)×10 + clip((PM25−20)/50, 0,1)×5",
+         "explain": "Poor air quality (AQI>55, PM2.5>20) signals industrial events or weather conditions that impair crew operations and outdoor equipment. Contributes up to 15 points."},
+        {"title": "Layer 3 — Net load pressure (max 10 pts)",
+         "color": "#1D9E75",
+         "formula": "net_load_s = clip((peak_load_mw − renewable_mw) / 220, 0,1) × 10",
+         "explain": "When demand is high but renewables are low (Dunkelflaute — dark, windless periods), the grid is under maximum thermal stress. This layer captures the demand-supply balance. Max 10 points."},
+        {"title": "Layer 4 — Outage intensity (max 16 pts)",
+         "color": "#e67e22",
+         "formula": "outage_s = clip(nearby_outages / 20, 0,1) × 16",
+         "explain": "Active outages within 25 km indicate real-world network stress — not just weather forecasts. This layer is the most direct evidence of actual grid problems. Max 16 points."},
+        {"title": "Layer 5 — ENS exposure (max 14 pts)",
+         "color": "#7F77DD",
+         "formula": "ens_s = clip(ENS_MW / 2500, 0,1) × 14",
+         "explain": "Energy Not Supplied in MW. Large ENS means many customers are already without power. This amplifies risk because restoration resources are already deployed. Max 14 points."},
+        {"title": "Calm guard + final score",
+         "color": "#27ae60",
+         "formula": "if live AND wind<24 AND rain<2 AND outages≤3:  risk = min(raw_sum, 36)",
+         "explain": "The calm-weather guard prevents the dashboard showing false-alarm risk scores in normal UK winter conditions. Without it, even a breezy cloudy day would score 30–40. With it, calm live readings show 8–18 — matching Ofgem RIIO-ED2 historical data. Stress scenarios bypass this cap entirely."},
+    ],
+
+    "simulation": [
+        {"title": "Canvas layer 1 — backdrop",
+         "color": "#1565c0",
+         "formula": "ctx.fillStyle = gradient(darkBlue→deepNavy); drawGrid(spacing=40, alpha=0.08)",
+         "explain": "The bottom layer draws the dark atmospheric background and a faint grid. This never changes — it is drawn once at initialisation and sits below all weather layers."},
+        {"title": "Canvas layer 2 — pressure contours",
+         "color": "#4a90d9",
+         "formula": "for each centre: drawIsobar(cx, cy, radius=base+sin(t×0.4)×20)",
+         "explain": "Two pressure centres (low and high) pulse gently using sin(time) to simulate real atmospheric oscillation. In storm mode the low-pressure centre dominates and its isobars tighten — indicating strong pressure gradients."},
+        {"title": "Canvas layer 3 — precipitation",
+         "color": "#1D9E75",
+         "formula": "rain_bands × 55, cloud_patches × 28, vortices × 3  (storm mode)",
+         "explain": "Rain bands are drawn as semi-transparent arcs. Cloud patches are ellipses with low opacity. Vortices rotate around the low-pressure centre. In calm mode: 8 bands, 6 clouds. Storm mode activates 55 bands, 28 clouds and 3 vortices."},
+        {"title": "Canvas layer 4 — frontal boundaries",
+         "color": "#ce93d8",
+         "formula": "warm_front: red dashed curve; cold_front: blue solid with triangles; dt-animated",
+         "explain": "Frontal boundaries are animated forward in time using dt (delta-time). The warm front is a dashed red curve, the cold front a solid blue line with small triangle symbols — matching BBC/Met Office weather map conventions."},
+        {"title": "Canvas layer 5 — wind vectors",
+         "color": "#fff59d",
+         "formula": "for each arrow: x += speed×cos(dir)×dt; y += speed×sin(dir)×dt; wrap()",
+         "explain": "155 wind arrows (storm mode) are particles that drift in the wind direction and wrap around the canvas edges. Arrow length scales with wind speed. In calm mode only 22 arrows appear."},
+        {"title": "Canvas layer 6 — city labels + stats bar",
+         "color": "#aee2ff",
+         "formula": "DOM overlay: position:absolute; stats update every frame via innerHTML",
+         "explain": "City labels are HTML <div> elements positioned absolutely over the canvas — not drawn on the canvas itself — so they stay crisp at any resolution. The stats bar updates every animation frame with live risk/resilience values."},
+    ],
+
+    "hazards": [
+        {"title": "Hazard stressor score",
+         "color": "#1D9E75",
+         "formula": "stress = clip((driver − threshold_low) / (threshold_high − threshold_low) × 100, 0, 100)",
+         "explain": "Each hazard type converts its raw meteorological driver into a 0–100 stress score using linear interpolation between two calibrated thresholds. Below the lower threshold: 0 stress. Above the upper threshold: 100 stress. Between them: proportional."},
+        {"title": "Wind storm stressor",
+         "color": "#378ADD",
+         "formula": "wind_stress = clip((wind_kmh − 25) / (55 − 25) × 100, 0, 100)",
+         "explain": "Wind stress is zero below 25 km/h (normal UK conditions). It reaches 100 at 55 km/h (severe storm). The 25–55 km/h range covers gale-force winds that damage overhead lines and restrict crew vehicle access."},
+        {"title": "Hazard resilience penalty",
+         "color": "#e67e22",
+         "formula": "score = 88 − weather_factor×stress_n×18 − social_n×6 − outage_n×7 − ens_n×5 − fail×7 − finance_n×4 − risk_n×6",
+         "explain": "Base score is 88 (UK grids are very reliable). Penalties are subtracted for each stress factor. The largest single penalty is hazard stress (up to 18 pts). Social vulnerability adds up to 6 pts because deprived areas have less capacity to cope. Clipped to range 15–100."},
+        {"title": "Calm-weather adjustment",
+         "color": "#27ae60",
+         "formula": "if calm: weather_factor = 0.25 (not 1.0); floor = max(score, 68)",
+         "explain": "In calm live conditions, the weather stress penalty is reduced to 25% of its full value, and the score cannot fall below 68. This prevents the hazard resilience showing 'Stressed' on a clear spring day — consistent with the UK's typically high infrastructure reliability."},
+        {"title": "Classification bands",
+         "color": "#7F77DD",
+         "formula": "≥80 → Robust  |  ≥65 → Stable  |  ≥45 → Stressed  |  <45 → Fragile",
+         "explain": "Each band has an operational meaning. Robust (80+): no action needed. Stable (65–79): routine monitoring. Stressed (45–64): investigation and medium-term investment plan required. Fragile (<45): urgent engineering intervention. Under live calm conditions most areas sit in Stable or Robust."},
+    ],
+
+    "iod": [
+        {"title": "Step 1 — IoD2025 Excel loading",
+         "color": "#D4537E",
+         "formula": "scanner searches 15 filesystem paths for files matching 'IoD*2025*.xlsx' or 'File_1*.xlsx'",
+         "explain": "The system automatically searches common data directory paths for IoD2025 Excel files from DLUHC (Department for Levelling Up, Housing and Communities). It reads all sheets and extracts the LAD (Local Authority District) name and 9 domain scores. 296 rows loaded for North East England."},
+        {"title": "Step 2 — 4-level LAD matching",
+         "color": "#993556",
+         "formula": "1. Exact name  →  2. Token subset  →  3. Regional aggregate  →  4. Fallback proxy",
+         "explain": "Each configured city is matched to IoD2025 data through a hierarchy. First: exact LAD name match ('Newcastle upon Tyne'). If that fails: partial token match ('newcastle'). If that fails: average of all LADs in the same region. Last resort: population-density and vulnerability proxy formula. All 6 cities achieved exact matches."},
+        {"title": "Step 3 — 9 domain composite",
+         "color": "#7F77DD",
+         "formula": "IoD_composite = mean(income, employment, health, education, crime, housing, living, IDACI, IDAOPI)",
+         "explain": "The 9 IoD2025 domains are averaged into a single composite score (0–100). Each domain measures a different aspect of deprivation. IDACI measures child poverty, IDAOPI measures older-person poverty. Newcastle upon Tyne composite ≈ 44/100 — moderate deprivation."},
+        {"title": "Step 4 — Social vulnerability blend",
+         "color": "#185FA5",
+         "formula": "social = 0.70 × IoD_composite + 0.30 × (0.40×density_n×100 + 0.60×IMD_score)",
+         "explain": "When IoD2025 data is matched, it contributes 70% of the social vulnerability score. The remaining 30% comes from the fallback formula using population density and IMD rank. This blend ensures IoD2025 data dominates while population density provides spatial granularity."},
+        {"title": "Step 5 — IMD direction (important!)",
+         "color": "#e67e22",
+         "formula": "IMD_score = 100 × (1 − rank/total_LADs)  →  higher score = MORE deprived",
+         "explain": "IMD ranks are INVERTED: rank 1 (most deprived) becomes score 100, rank N (least deprived) becomes score 0. This is counter-intuitive but essential — a high social vulnerability score means MORE vulnerable, which increases financial loss and resilience penalties. Newcastle ≈ 44/100 means moderately deprived."},
+    ],
+
+    "map": [
+        {"title": "Step 1 — Fetch real boundary GeoJSON",
+         "color": "#1565c0",
+         "formula": "GET https://raw.githubusercontent.com/missinglink/uk-postcode-polygons/master/geojson/{area}.geojson",
+         "explain": "Real UK postcode district boundary polygons are fetched from missinglink/uk-postcode-polygons (public domain, GitHub). Each area code (NE, SR, DH, TS, DL for North East) returns a GeoJSON FeatureCollection with one feature per district. NE area alone has 59 districts (NE1–NE46). Cached for 24 hours."},
+        {"title": "Step 2 — Centroid calculation",
+         "color": "#378ADD",
+         "formula": "cx = mean([c[0] for c in ring]);  cy = mean([c[1] for c in ring])",
+         "explain": "For each postcode district polygon, the centroid is calculated as the arithmetic mean of all coordinate pairs in the outer ring. This is a fast approximation (not the true geometric centroid) but accurate enough for IDW interpolation at this scale."},
+        {"title": "Step 3 — IDW risk interpolation",
+         "color": "#7F77DD",
+         "formula": "risk = Σ(place_risk / dist²) / Σ(1 / dist²)     [min dist: 0.5 km]",
+         "explain": "Inverse-Distance Weighted interpolation assigns a risk score to each district centroid based on the 6 configured places. Closer places have proportionally more influence (distance squared weighting). The 0.5 km minimum prevents division-by-zero for centroids very close to a place location."},
+        {"title": "Step 4 — Continuous pastel gradient",
+         "color": "#BA7517",
+         "formula": "colour = interpolate(stops, risk/100)  →  8-stop gradient: blue→green→yellow→orange→pink→purple",
+         "explain": "The interpolated risk score (0–100) is mapped to a position on an 8-stop pastel colour gradient. Intermediate values produce unique blended colours. This gives 39 distinct colour tones across the 59 NE districts — matching the visual richness of a professional UK postcode atlas map."},
+        {"title": "Step 5 — Render choropleth",
+         "color": "#27ae60",
+         "formula": "Scattermapbox(fill='toself', fillcolor=colour, line=dict(width=0.6, color='#8e9bab'))",
+         "explain": "Each district is rendered as a filled polygon using Plotly Scattermapbox with fill='toself'. Thin grey boundaries (0.6px) separate districts. The light carto-positron basemap provides road/settlement context without competing with the risk colours. City markers (red dots) are added as a separate trace on top."},
+    ],
+
+    "resilience": [
+        {"title": "Base score: 92",
+         "color": "#27ae60",
+         "formula": "resilience = 92  (UK grids are highly reliable by default)",
+         "explain": "The resilience model starts at 92/100. This reflects the UK's genuinely high grid reliability — Ofgem RIIO-ED2 data shows average customers experience less than 1 hour of interruption per year. The model deducts points for specific risk factors rather than building up from zero."},
+        {"title": "Penalty 1 — Risk score (weight 0.28)",
+         "color": "#c0392b",
+         "formula": "pen_risk = 0.28 × risk_score  →  max penalty: 0.28 × 100 = 28 pts",
+         "explain": "The overall risk score directly penalises resilience. A location scoring 80 on risk (e.g. during Storm Arwen) loses 22.4 points here alone. This is the largest single penalty term, reflecting that high operational risk is the primary driver of low resilience."},
+        {"title": "Penalties 2–6 combined",
+         "color": "#7F77DD",
+         "formula": "−0.11×social  −9×grid_fail  −5×renew_fail  −7×cascade  −clip(loss/£25m,0,1)×6",
+         "explain": "Social vulnerability (−0.11×) reduces resilience because deprived areas recover more slowly. Grid failure probability is multiplied by 9 — even a 3% failure chance subtracts 0.27 points. Renewable failure (−5×) captures Dunkelflaute risk. Cascade (−7×) captures interdependency with water/telecom. Finance capped at −6 pts."},
+        {"title": "Infrastructure cascade",
+         "color": "#e67e22",
+         "formula": "water = power^1.35 × 0.74;  telecom = power^1.22 × 0.82;  transport = ((power+telecom)/2) × 0.70",
+         "explain": "Power grid failure cascades to dependent infrastructure using power-law relationships (Panteli & Mancarella, 2015). Water and wastewater pumping fails non-linearly. Telecommunications partially follows. Transport is affected by both power and telecom. The cascade score feeds back into the resilience penalty."},
+        {"title": "Classification + final score",
+         "color": "#185FA5",
+         "formula": "≥80 Robust  |  ≥60 Functional  |  ≥40 Stressed  |  <40 Fragile  [range: 15–100]",
+         "explain": "The final score is clipped to 15–100 (15 is the theoretical minimum under a full blackout in a highly deprived area). Under calm live conditions most UK areas score 68–82 (Functional to Robust). Stressed/Fragile classification triggers investment priority flags in the Investment Engine tab."},
+    ],
+
+    "failure": [
+        {"title": "Z-score architecture",
+         "color": "#7F77DD",
+         "formula": "z = −4.45 + 1.05×base + 0.95×grid + 0.55×renew + 0.45×social_n + ...",
+         "explain": "The logistic failure model combines 9 inputs into a single z-score. The intercept (−4.45) is calibrated so that at UK average conditions (base≈0.05, grid≈0.04, social≈0.45, no outages) z≈−4.2 and prob≈1.5% — matching the national annual interruption rate from Ofgem RIIO-ED2."},
+        {"title": "Logistic function → probability",
+         "color": "#c0392b",
+         "formula": "prob = 1 / (1 + exp(−z))",
+         "explain": "The logistic (sigmoid) function converts the z-score to a probability (0–1). Negative z → probability near 0. z=0 → probability 50%. Positive z → probability near 1. The z-score calibration ensures realistic UK values: typically z≈−4 in calm conditions → prob≈1.8%, before the calm guard."},
+        {"title": "Calm-weather guard",
+         "color": "#27ae60",
+         "formula": "if calm: prob = min(prob × 0.35, 0.18)  →  max 18% in calm conditions",
+         "explain": "The calm guard applies a 0.35 multiplier and a hard cap of 18%. This prevents the enhanced failure model showing 'Critical' (>45%) in normal UK winter weather. Without this guard, moderate wind+rain combinations would produce unrealistic 25–40% failure probabilities."},
+        {"title": "Recommendation score (0–100)",
+         "color": "#BA7517",
+         "formula": "rec = 0.30×risk + 0.22×social + 0.18×(100−res) + 0.13×loss_n + 0.10×ENS_n + 0.07×out_n",
+         "explain": "The recommendation score drives investment prioritisation. It weights risk (30%), social vulnerability (22%), resilience gap (18%), financial loss (13%), ENS (10%) and outage history (7%). Under calm live conditions typical scores are 20–38, placing most areas in the Monitor band."},
+        {"title": "Priority bands + indicative cost",
+         "color": "#185FA5",
+         "formula": "cost = £120,000 + rec×£8,500 + outages×£35,000 + clip(ENS,0,1000)×£260",
+         "explain": "Priority 1 (≥75): immediate action — typically rec scores only achieved during stress scenarios. Priority 2 (≥55): high priority. Priority 3 (≥35): medium priority. Monitor (<35): normal operations. The £49m programme estimate = 106 districts × average £463k each — dominated by the base cost and rec×£8,500 term."},
+    ],
+
+    "scenario": [
+        {"title": "Live baseline (1.0× — no multipliers)",
+         "color": "#27ae60",
+         "formula": "all multipliers = 1.0;  STRESS_PROFILES inactive;  calm guards active",
+         "explain": "The live baseline uses real-time weather from Open-Meteo APIs with no amplification. Calm-weather guards are active. Risk ≈ 10–15, resilience ≈ 75–80, financial loss ≈ £140–200m across the region. This is the reference point for all scenario comparisons."},
+        {"title": "Physics-based scenario multipliers",
+         "color": "#e67e22",
+         "formula": "Extreme wind: finance×2.15, wind×3.60  |  Flood: finance×2.40, rain×7.50  |  Blackout: finance×4.20",
+         "explain": "Each scenario multiplies the relevant weather variables and financial loss by calibrated factors. Wind multiplier 3.60 means wind speed is 3.6× its live value — consistent with a 1-in-10-year UK severe gale. The finance multiplier captures extended duration, cascading damage and emergency response costs."},
+        {"title": "STRESS_PROFILES — mandatory floors",
+         "color": "#c0392b",
+         "formula": "Extreme wind: risk_floor=72, failure_floor=0.46, resilience_pen=18  |  Blackout: risk_floor=92",
+         "explain": "STRESS_PROFILES override the bottom of the output range — ensuring scenarios always look more severe than the live baseline even if the weather multipliers alone would not produce enough uplift. They encode the engineering reality: in a real storm, response is harder and duration is longer than models alone predict."},
+        {"title": "Calibration sources",
+         "color": "#185FA5",
+         "formula": "Storm Arwen 2021, July 2022 heatwave, 2013–14 winter storms, Met Office return periods",
+         "explain": "The multiplier values are calibrated against post-incident cost analyses. Storm Arwen (Nov 2021) affected 1 million customers for up to 10 days — informing the Extreme Wind profile. The July 2022 heatwave caused transformer failures across England — informing the Heatwave profile. The Compound scenario combines the worst elements of all."},
+        {"title": "Scenario loss comparison",
+         "color": "#7F77DD",
+         "formula": "scenario_loss = live_loss × finance_multiplier  →  Live £183m → Blackout ~£771m",
+         "explain": "Financial loss scales linearly with the finance multiplier because the underlying loss formula components (VoLL, customer cost etc.) all depend on ENS and outage count, which themselves scale with the scenario. The 4.2× Blackout multiplier represents a full regional cascade — consistent with UK major incident cost estimates."},
+    ],
+
+    "finance": [
+        {"title": "Outage duration (feeds all 3 MWh-based components)",
+         "color": "#378ADD",
+         "formula": "duration_h = 1.5 + clip(faults / 6, 0, 1) × 5.5  →  range: 1.5h to 7.0h",
+         "explain": "Duration is estimated from the number of simultaneous faults. A single fault typically clears in 1.5 hours (fast-clearance). Six or more faults simultaneously require sequential crew deployment and can take 7 hours. This duration is then used to convert ENS_MW to ENS_MWh for the VoLL, business disruption and critical services calculations."},
+        {"title": "Component 1 — VoLL (Value of Lost Load)",
+         "color": "#378ADD",
+         "formula": "VoLL = ENS_MWh × £17,000/MWh",
+         "explain": "VoLL is the headline economic impact. £17,000/MWh is the BEIS 2019 estimate for a mixed domestic and commercial customer base — derived from household and business surveys asking 'how much would you pay to avoid a power cut?'. Ofgem RIIO-ED2 used £16,240–£21,000/MWh range. This single component is typically 60–70% of total loss."},
+        {"title": "Component 2 — Customer interruption",
+         "color": "#1D9E75",
+         "formula": "customer_cost = affected_customers × £48",
+         "explain": "Each affected customer (household or business) incurs £48 of direct inconvenience — spoiled food, lost heating, missed work. Source: RAEng 2014 blackout study and DNO customer research 2023 (£35–£55 range). Note: this is NOT the Ofgem IIS regulatory penalty (£87) — that is a financial incentive for the DNO, not the customer's actual cost."},
+        {"title": "Components 3–5",
+         "color": "#BA7517",
+         "formula": "business = ENS_MWh×£1,100×density  |  restoration = faults×£18,500  |  critical = ENS_MWh×£320×(social/100)",
+         "explain": "Business disruption (CBI 2011): scales with commercial area density — a city-centre postcode gets full £1,100/MWh, residential suburb gets ~£220/MWh. Restoration (NPg RIIO-ED2): £18,500 per fault incident including crew, materials and overhead. Critical services (NHS/CQC/BMA): scales with social vulnerability — NHS and care homes in deprived areas face highest generator costs."},
+        {"title": "Funding priority score",
+         "color": "#7F77DD",
+         "formula": "priority = 0.26×risk + 0.20×(100−res) + 0.18×social + 0.15×loss_n + 0.11×ENS_n + 0.06×out_n + 0.04×rec",
+         "explain": "The 7-criterion funding priority score ranks postcodes for Ofgem investment submissions. Risk and resilience gap have the highest weights (26% and 20%). Social vulnerability (18%) ensures deprived areas are not systematically under-invested. Immediate funding threshold: ≥78/100. Under calm conditions typical scores are 15–35 (Monitor band)."},
+    ],
+
+    "investment": [
+        {"title": "Step 1 — Group NPG outages by postcode",
+         "color": "#378ADD",
+         "formula": "df.groupby('postcode_label').agg(count=('id','count'), customers=('affected_customers','sum'))",
+         "explain": "Northern Powergrid live outage records are grouped by postcode label (first 3–4 characters of the affected postcode). Each group becomes one postcode record with an aggregated fault count, total customers affected and geographic centroid. This creates the raw postcode-level evidence base."},
+        {"title": "Step 2 — Outage pressure penalties",
+         "color": "#e67e22",
+         "formula": "outage_pen = clip(count/6, 0,1)×16;  cust_pen = clip(cust/1500, 0,1)×12;  dist_pen = clip(dist_km/15, 0,1)×4",
+         "explain": "Each postcode is penalised based on its outage record. Up to 16 points for fault frequency (capped at 6+ faults), 12 points for customer impact (capped at 1,500+ affected) and 4 points for proximity to the nearest configured place. These penalties reduce the postcode's resilience score below the place-level value."},
+        {"title": "Step 3 — Recommendation score",
+         "color": "#BA7517",
+         "formula": "rec = 0.30×risk + 0.22×social + 0.18×(100−res) + 0.13×(loss/max×100) + 0.10×(ENS/700×100) + 0.07×clip(out/6)×100",
+         "explain": "The recommendation score (0–100) is calculated per postcode using the same 6-criterion formula as the failure tab. Under calm live conditions: typical rec = 20–38 (Monitor band). Under Storm scenario: rec can reach 75–90 (Priority 1) in high-risk postcodes with outage history."},
+        {"title": "Step 4 — Indicative investment cost",
+         "color": "#7F77DD",
+         "formula": "cost = £120,000 + rec×£8,500 + outages×£35,000 + clip(ENS, 0, 1000)×£260",
+         "explain": "The £120k base covers minimum mobilisation (planning, surveys, safety). The rec×£8,500 term scales with how urgently investment is needed. Each outage record adds £35k (average repair cost from NPg RIIO-ED2). ENS×£260 represents backup generation or temporary supply costs. 106 districts × avg £463k = £49m total."},
+        {"title": "Step 5 — Total exposed loss",
+         "color": "#c0392b",
+         "formula": "total_exposed = sum(financial_loss_gbp across all postcode records)",
+         "explain": "The total exposed loss (£1.8bn) is the accumulated economic risk across all 106 postcode districts — not a single event loss, but the sum of all postcode-level financial loss estimates. It represents the total economic value at risk in the region under current conditions. Under stress scenarios this rises to £4–8bn."},
+    ],
+
+    "mc": [
+        {"title": "Shared storm shock variable",
+         "color": "#7F77DD",
+         "formula": "shock = numpy.random.normal(0, 1, n_simulations)  →  ONE shared draw per simulation",
+         "explain": "The key innovation: a single standard-normal random draw (shock) is shared across all weather variables in the same simulation. This creates realistic correlation — in a storm, wind AND rain AND outages all intensify together. Without this shared shock, independent sampling would underestimate tail risk by approximately 35%."},
+        {"title": "Correlated variable generation",
+         "color": "#378ADD",
+         "formula": "wind = base_wind × exp(0.16×shock + noise);  rain = base_rain × exp(0.28×shock + noise)",
+         "explain": "Wind and rain are generated as log-normal perturbations of their base values, driven by the shared shock. Coefficient 0.16 for wind (moderate storm correlation), 0.28 for rain (higher correlation — rain events are more concentrated). ENS is amplified by max(shock,0) — only positive shocks (storms) increase ENS, not negative ones."},
+        {"title": "Risk and failure per simulation",
+         "color": "#e67e22",
+         "formula": "risk = 27×(wind/45) + 18×(rain/6) + 17×(AQI/100) + 20×(outage/10) + 17×(ENS/1500);  fail = 1/(1+exp(−0.07×(risk−58)))",
+         "explain": "Each simulation produces a risk score using the same 5-layer formula as the main model. The failure probability uses a logistic with inflection at risk=58 — more sensitive than the main model's calm-mode logistic, appropriate for the MC's exploratory range. At P95 risk=58.7: failure≈50%. Average across all sims → mean failure 39.8%."},
+        {"title": "Financial loss with lognormal tails",
+         "color": "#c0392b",
+         "formula": "voll = ENS_MWh × LogNormal(ln(17000), σ=0.18);  restoration = faults × LogNormal(ln(18500), σ=0.25)",
+         "explain": "Financial losses use log-normal distributions (not fixed point estimates). σ=0.18 for VoLL captures uncertainty in the £17,000/MWh rate. σ=0.25 for restoration costs captures the wide range of real fault costs (£8k–£35k). The heavy right tail of the log-normal distribution is why CVaR95 >> mean loss."},
+        {"title": "P95 and CVaR95 calculation",
+         "color": "#185FA5",
+         "formula": "P95_risk = percentile(risk_array, 95);  CVaR95 = mean(loss_array[loss_array >= percentile(loss_array, 95)])",
+         "explain": "P95 risk (58.7 for Newcastle) is the 950th-highest risk score in 1,000 simulations. CVaR95 (£161.76m) is the average loss in the worst 50 simulations — not the worst single value. This is the correct exceedance-mean formula. A previous version used array slicing which gave wrong results due to floating-point index truncation."},
+    ],
+
+    "validation": [
+        {"title": "Check 1–3: Transparency + monotonicity",
+         "color": "#27ae60",
+         "formula": "transparency: all formulas readable; corr(risk, ENS) test; corr(risk, resilience) test",
+         "explain": "The first three checks verify that (1) the model is not a black box — all formulas must be in the code and README, (2) risk increases with ENS (correlation ≥ −0.3), and (3) resilience decreases as risk increases (correlation ≤ +0.4). These are sanity checks that catch formula sign errors and accidental inversions."},
+        {"title": "Check 4–6: Quantification + social + hazards",
+         "color": "#185FA5",
+         "formula": "financial loss present; IoD2025 matched; 5 hazard types each with >0 variance",
+         "explain": "Checks 4–6 verify that financial loss is quantified (not just risk scores), that social vulnerability data is integrated (not zero), and that all 5 hazard types produce varying outputs. A hazard that always returns the same value would indicate a broken stressor formula."},
+        {"title": "Check 7–8: No circular feedback + grid realism",
+         "color": "#e67e22",
+         "formula": "compound_hazard uses only wind/rain/AQI/outage inputs (not itself);  mean(grid_failure) < 0.10",
+         "explain": "Check 7 verifies the compound hazard stressor does not feed back into itself (which would create a circular dependency causing infinite escalation). Check 8 verifies the mean grid failure probability is below 10% in live mode — consistent with Ofgem RIIO-ED2 Customer Interruptions statistics."},
+        {"title": "Check 9–10: CVaR95 + EV/V2G coverage",
+         "color": "#7F77DD",
+         "formula": "CVaR95 > P95_loss (by definition);  EV_data present in places DataFrame",
+         "explain": "Check 9 verifies CVaR95 > P95 loss (by definition, the conditional expectation of the tail must exceed the threshold). If this fails, the CVaR formula has a bug. Check 10 verifies EV/V2G data is integrated — required for completeness of the digital twin scope. All 10 checks pass under normal live conditions."},
+    ],
+
+    "method": [
+        {"title": "Core model: risk score",
+         "color": "#378ADD",
+         "formula": "risk = weather(max57) + pollution(max15) + net_load(max10) + outage(max16) + ENS(max14)  [cap 100]",
+         "explain": "The risk model is a linear weighted sum of 5 layers. Coefficients are set by engineering judgment about relative severity: weather dominates (57/100) because it is the primary physical driver of UK grid faults. Outage clustering (16/100) is the most direct observational evidence. All weights sum to 112 — the cap at 100 prevents simultaneous maxima from being unrealistic."},
+        {"title": "Calibration philosophy",
+         "color": "#7F77DD",
+         "formula": "Every coefficient traces to: BEIS 2019 | Ofgem RIIO-ED2 | RAEng 2014 | CBI 2011 | NPg 2023",
+         "explain": "No coefficient in the model is 'tuned to fit' without an external reference. VoLL=£17,000 is BEIS 2019. Grid failure intercept −4.45 is calibrated to Ofgem CI data. Restoration cost £18,500 is Northern Powergrid's RIIO-ED2 submission. The resilience base of 92 reflects Ofgem's SAIDI statistics showing UK customers average <1h interruption/year."},
+        {"title": "Limitations for operational use",
+         "color": "#e67e22",
+         "formula": "Not a licensed engineering tool. Replace with: Ofgem CNAIM + DNO asset records + RIIO-ED3 unit costs",
+         "explain": "For regulatory submissions (RIIO-ED3, Ofgem CNAIM), replace the proxy unit costs with: actual DNO asset health indices, measured SAIDI/SAIFI per feeder, Ofgem-approved VoLL by postcode sector, and actual restoration cost records from the asset management system. This model provides directional estimates and relative rankings, not absolute engineering assessments."},
+        {"title": "Academic references",
+         "color": "#185FA5",
+         "formula": "Panteli & Mancarella (2015) · Billinton & Allan (1996) · BEIS 2019 · Ofgem RIIO-ED2 · RAEng 2014",
+         "explain": "Key academic foundations: Panteli & Mancarella (2015) 'The grid: Stronger, bigger, smarter?' in IEEE Transactions on Power Systems — provides the cascade interdependency power-law model. Billinton & Allan (1996) 'Reliability Evaluation of Power Systems' — provides the logistic failure probability framework. BEIS 2019 VoLL study provides all financial unit rates."},
+    ],
+
+    "readme": [
+        {"title": "Documentation structure",
+         "color": "#555",
+         "formula": "9 sections: Overview → Tabs → Key fixes → Equations → Data → Scenarios → Limitations → Assembly → References",
+         "explain": "The README is embedded directly in the application to ensure version consistency — the documentation cannot become out of date relative to the code. It serves simultaneously as the academic paper's methods section, the regulatory submission's technical appendix, and the deployment guide."},
+        {"title": "6 critical fixes applied",
+         "color": "#c0392b",
+         "formula": "grid_failure calibration · spatial map GeoJSON · CVaR95 formula · no circular compound · flood_depth · duplicate functions",
+         "explain": "Six significant bugs were identified and fixed during development: (1) grid failure probability was 6.9% in calm weather — now 0.3–1.5%. (2) Spatial map used hand-drawn polygons — now uses real postcode GeoJSON. (3) CVaR95 used array slicing — now uses correct exceedance mean. (4) Compound hazard used its own output as input — fixed. (5) flood_depth_proxy was not written to DataFrame — fixed. (6) clamp() defined twice — fixed."},
+        {"title": "Deployment instructions",
+         "color": "#27ae60",
+         "formula": "pip install streamlit pandas numpy requests openpyxl pydeck plotly;  streamlit run app.py",
+         "explain": "The application is a single Python file (~11,000 lines) deployable on Streamlit Cloud with no database or external services beyond the Open-Meteo and Northern Powergrid public APIs. IoD2025 files should be placed in data/iod2025/ for full social vulnerability matching. Without them, the proxy formula activates automatically."},
+    ],
+
+    "export": [
+        {"title": "places CSV — all model outputs",
+         "color": "#378ADD",
+         "formula": "sat_guard_places.csv: 1 row per configured place, ~40 columns",
+         "explain": "The places CSV contains every model output for each configured city: risk score (all 5 layer scores), grid failure probability (both regimes), resilience index, social vulnerability, ENS, financial loss (all 5 components), Monte Carlo P95/CVaR95, and all raw weather API values. This is the primary output for academic analysis."},
+        {"title": "postcodes + recommendations CSVs",
+         "color": "#1D9E75",
+         "formula": "sat_guard_postcodes.csv + sat_guard_recommendations.csv: 106 rows each",
+         "explain": "The postcodes CSV contains resilience scores, recommendation scores, investment priority bands and indicative costs for all 106 postcode districts. The recommendations CSV adds the specific recommended action text, BCR note and nearest configured place. These two files together constitute the investment case for a regulatory submission."},
+        {"title": "outages + grid CSVs",
+         "color": "#BA7517",
+         "formula": "sat_guard_outages.csv: live NPG records;  sat_guard_grid.csv: 15×15=225 IDW cells",
+         "explain": "The outages CSV exports the live Northern Powergrid records with an is_synthetic_outage flag (True = visual fallback, not a real fault). The grid CSV exports the 15×15 interpolation grid covering the region — 225 cells each with full risk, resilience and weather data. This enables GIS import and spatial analysis in external tools."},
+        {"title": "Reproducibility note",
+         "color": "#7F77DD",
+         "formula": "deterministic for fixed scenario + seed;  API results = snapshot at refresh time",
+         "explain": "Model outputs are deterministic for a given scenario, seed and input data. The only non-deterministic element is the weather API, which returns real-time data. To reproduce a specific run, export the CSV immediately after refresh and store alongside the scenario name and timestamp. Monte Carlo results use numpy's default_rng() — set a seed for exact reproduction."},
+    ],
+}
+
+
+def _wrap_svg_clickable(svg_html: str, tab_key: str) -> str:
+    """
+    Wrap an SVG string in a clickable container that opens the step modal.
+
+    The SVG gets a hover ring and a 'click to explore' pill.
+    Clicking calls openFigureModal(tab_key) which is defined in the
+    modal JS injected by render_tab_brief().
+    """
+    return (
+        f"<div style='position:relative;cursor:pointer;display:inline-block;width:100%;'"
+        f" onclick=\"openFigureModal('{tab_key}')\" title='Click to explore step by step'>"
+        f"{svg_html}"
+        f"<div style='position:absolute;bottom:8px;right:8px;"
+        f"background:rgba(127,119,221,.92);color:#fff;font-size:10px;"
+        f"padding:3px 9px;border-radius:20px;pointer-events:none;"
+        f"font-family:sans-serif;font-weight:500;'>▶ Click to explore</div>"
+        f"<style>"
+        f"div:hover > svg{{outline:2px solid #7F77DD;outline-offset:2px;border-radius:10px;}}"
+        f"</style>"
+        f"</div>"
+    )
+
+
+def _modal_js_for_tab(tab_key: str) -> str:
+    """
+    Return the self-contained JS + HTML for the step-through modal.
+    Embeds the step data for this specific tab inline.
+    """
+    import json as _json
+
+    steps = _FIGURE_STEPS.get(tab_key, [])
+    if not steps:
+        return ""
+
+    steps_json = _json.dumps(steps)
+    n = len(steps)
+
+    return f"""
+<div id="fig-overlay" style="
+  display:none;position:fixed;inset:0;background:rgba(8,8,20,.78);
+  z-index:99999;align-items:center;justify-content:center;
+" onclick="handleFigOverlayClick(event)">
+
+  <div id="fig-modal" style="
+    background:#fff;border-radius:16px;
+    width:min(760px,95vw);max-height:90vh;
+    overflow:hidden;display:flex;flex-direction:column;
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  ">
+
+    <!-- header -->
+    <div style="padding:13px 18px 10px;border-bottom:1px solid #eee;
+      display:flex;align-items:center;gap:10px;flex-shrink:0;">
+      <div id="fig-title" style="flex:1;font-size:14px;font-weight:600;color:#1a252f;"></div>
+      <button onclick="closeFigModal()" style="
+        width:28px;height:28px;border:1px solid #ddd;border-radius:8px;
+        background:#fff;cursor:pointer;font-size:15px;color:#666;
+        display:flex;align-items:center;justify-content:center;
+      ">✕</button>
+    </div>
+
+    <!-- dot nav + step counter -->
+    <div style="padding:9px 18px;border-bottom:1px solid #f0f0f0;
+      display:flex;align-items:center;gap:10px;flex-shrink:0;">
+      <div id="fig-dots" style="display:flex;gap:6px;align-items:center;"></div>
+      <div id="fig-counter" style="flex:1;font-size:11px;color:#aaa;margin-left:4px;"></div>
+      <button id="fig-prev" onclick="figPrev()" style="
+        padding:5px 13px;border-radius:8px;border:1px solid #ddd;
+        background:#fff;cursor:pointer;font-size:12px;font-weight:500;color:#444;">← Back</button>
+      <button id="fig-next" onclick="figNext()" style="
+        padding:5px 13px;border-radius:8px;border:1px solid #7F77DD;
+        background:#7F77DD;cursor:pointer;font-size:12px;font-weight:500;color:#fff;">Next →</button>
+    </div>
+
+    <!-- formula bar -->
+    <div id="fig-formula" style="
+      padding:9px 18px;background:#f0f4ff;
+      border-bottom:1px solid #e0e8ff;flex-shrink:0;
+      font-size:11px;font-family:'SF Mono',Menlo,Consolas,monospace;
+      color:#185FA5;line-height:1.5;
+    "></div>
+
+    <!-- explanation -->
+    <div id="fig-explain" style="
+      padding:14px 18px;font-size:12.5px;color:#333;
+      line-height:1.7;flex:1;overflow-y:auto;
+    "></div>
+
+    <!-- accent bar at bottom -->
+    <div id="fig-accent" style="height:4px;flex-shrink:0;transition:background .4s;"></div>
+
+  </div>
+</div>
+
+<script>
+(function(){{
+  var STEPS = {steps_json};
+  var cur = 0;
+
+  function render(){{
+    var s = STEPS[cur];
+    document.getElementById('fig-title').textContent = s.title;
+    document.getElementById('fig-formula').textContent = s.formula;
+    document.getElementById('fig-explain').textContent = s.explain;
+    document.getElementById('fig-accent').style.background = s.color;
+    document.getElementById('fig-counter').textContent =
+      'Step ' + (cur+1) + ' of ' + STEPS.length;
+
+    // dots
+    var dots = '';
+    for(var i=0;i<STEPS.length;i++){{
+      var bg = i < cur ? '#c8e6c9' : i===cur ? STEPS[cur].color : '#e0e0e0';
+      var sz = i===cur ? '11px' : '7px';
+      dots += '<div onclick="figGo('+i+')" style="width:'+sz+';height:'+sz+';border-radius:50%;'
+        + 'background:'+bg+';cursor:pointer;transition:all .25s;flex-shrink:0;"></div>';
+    }}
+    document.getElementById('fig-dots').innerHTML = dots;
+
+    var prev = document.getElementById('fig-prev');
+    var next = document.getElementById('fig-next');
+    prev.disabled = cur===0;
+    prev.style.opacity = cur===0 ? '.3' : '1';
+    if(cur===STEPS.length-1){{
+      next.textContent = '✓ Close';
+      next.onclick = closeFigModal;
+    }} else {{
+      next.textContent = 'Next →';
+      next.onclick = figNext;
+    }}
+  }}
+
+  window.openFigureModal = function(key){{
+    cur = 0;
+    render();
+    var ov = document.getElementById('fig-overlay');
+    ov.style.display = 'flex';
+  }};
+
+  window.closeFigModal = function(){{
+    document.getElementById('fig-overlay').style.display = 'none';
+  }};
+
+  window.handleFigOverlayClick = function(e){{
+    if(e.target===document.getElementById('fig-overlay')) closeFigModal();
+  }};
+
+  window.figNext = function(){{
+    if(cur < STEPS.length-1){{ cur++; render(); }}
+  }};
+
+  window.figPrev = function(){{
+    if(cur > 0){{ cur--; render(); }}
+  }};
+
+  window.figGo = function(i){{
+    cur = i; render();
+  }};
+}})();
+</script>
+"""
+
+
+
 def render_tab_brief(tab_key: str) -> None:
     """
-    Render an academic presentation brief inside a Streamlit expander.
-
-    Uses components.html with a generous fixed height and scrolling=True
-    so the full content (text + SVG figure) is always visible.
-
-    Layout: coloured header bar | two-column grid (text left, SVG right).
-    The right column SVG is given a fixed 300px width so it never squeezes.
-    Body overflow is visible/scroll — never hidden — to prevent SVG clipping.
+    Render an academic presentation brief using components.html.
+    The right-column figure is wrapped in a clickable container.
+    Clicking opens a full-panel step-by-step calculation modal.
     """
     BRIEFS = _get_briefs()
     if tab_key not in BRIEFS:
@@ -10367,9 +10876,12 @@ def render_tab_brief(tab_key: str) -> None:
         for p in b["pills"]
     )
 
-    accent = b["tag_color"]
-    text_c = b["tag_text_color"]
-    visual = b["svg_or_html"]
+    accent  = b["tag_color"]
+    text_c  = b["tag_text_color"]
+
+    # Wrap SVG in clickable container + inject modal JS
+    visual        = _wrap_svg_clickable(b["svg_or_html"], tab_key)
+    modal_section = _modal_js_for_tab(tab_key)
 
     html_code = (
         "<!doctype html><html><head><meta charset='utf-8'>"
@@ -10421,6 +10933,7 @@ def render_tab_brief(tab_key: str) -> None:
         "</div>"
         f"<div class='right'>{visual}</div>"
         "</div>"
+        f"{modal_section}"
         "</body></html>"
     )
 
@@ -10428,7 +10941,7 @@ def render_tab_brief(tab_key: str) -> None:
         f"📋 Academic brief — {b['tab_name']}",
         expanded=False,
     ):
-        components.html(html_code, height=620, scrolling=True)
+        components.html(html_code, height=640, scrolling=True)
 
 def render_readme_tab() -> None:
     """Render the full README documentation tab."""
