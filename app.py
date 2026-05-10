@@ -10501,7 +10501,7 @@ _TAB_STEPPERS: dict = {
 <div class='ar' style='animation-delay:.5s;display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#fefce8;border-radius:8px;'><span style='font-size:13px;'>🟡 Priority 3</span><span style='font-size:12px;font-weight:700;color:#ca8a04;'>score 35–54</span></div>
 <div class='ar' style='animation-delay:.6s;display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#dcfce7;border-radius:8px;'><span style='font-size:13px;'>🟢 Monitor</span><span style='font-size:12px;font-weight:700;color:#16a34a;'>score &lt; 35</span></div>
 </div>
-<div class='af' style='animation-delay:.75s;background:#e0f2fe;border:1px solid #7dd3fc;border-radius:8px;padding:8px 12px;margin-top:8px;font-size:13px;color:#0369a1;'>💡 Cost: £120k + score×£8,500 + outages×£35k + ENS×£260</div>""",
+<div class='af' style='animation-delay:.75s;background:#e0f2fe;border:1px solid #7dd3fc;border-radius:7px;padding:7px 11px;margin-top:6px;font-size:12px;color:#0369a1;'>💡 £120k + score×£8,500 + outages×£35k + ENS×£260</div>""",
          "viz":"<svg viewBox='0 0 180 200' style='width:100%;max-width:180px;'><text x='90' y='16' text-anchor='middle' font-size='13' font-weight='600' fill='#64748b' font-family='sans-serif'>Priority threshold</text><rect x='10' y='24' width='160' height='12' rx='2' fill='#e2e8f0'/><rect x='10' y='24' width='160' height='12' rx='2' fill='url(#pg2)' class='af' style='animation-delay:.3s;'/><defs><linearGradient id='pg2' x1='0' y1='0' x2='1' y2='0'><stop offset='0%' stop-color='#22c55e'/><stop offset='35%' stop-color='#eab308'/><stop offset='55%' stop-color='#f97316'/><stop offset='75%' stop-color='#ef4444'/></linearGradient></defs><text x='10' y='52' font-size='13' fill='#94a3b8' font-family='sans-serif'>0</text><text x='52' y='52' text-anchor='middle' font-size='13' fill='#94a3b8' font-family='sans-serif'>35</text><text x='94' y='52' text-anchor='middle' font-size='13' fill='#94a3b8' font-family='sans-serif'>55</text><text x='126' y='52' text-anchor='middle' font-size='13' fill='#94a3b8' font-family='sans-serif'>75</text><text x='166' y='52' text-anchor='middle' font-size='13' fill='#94a3b8' font-family='sans-serif'>100</text><rect x='10' y='62' width='160' height='28' rx='7' fill='#f8fafc' stroke='#e2e8f0' stroke-width='1' class='af' style='animation-delay:.4s;'/><text x='90' y='80' text-anchor='middle' font-size='13' fill='#475569' font-family='sans-serif' class='af' style='animation-delay:.42s;'>🌤️ Calm live: score ≈ 22–38</text><line x1='38' y1='58' x2='38' y2='62' stroke='#16a34a' stroke-width='1.5' class='al' style='animation-delay:.5s;stroke-dasharray:10;stroke-dashoffset:10;'/><rect x='10' y='102' width='160' height='26' rx='7' fill='#f0fdf4' stroke='#86efac' stroke-width='1' class='ap' style='animation-delay:.55s;'/><text x='90' y='119' text-anchor='middle' font-size='13' fill='#166534' font-family='sans-serif' class='af' style='animation-delay:.57s;'>🟢 → Monitor band</text><rect x='10' y='138' width='160' height='26' rx='7' fill='#fefce8' stroke='#fde047' stroke-width='1' class='ap' style='animation-delay:.7s;'/><text x='90' y='155' text-anchor='middle' font-size='13' fill='#92400e' font-family='sans-serif' class='af' style='animation-delay:.72s;'>⛈️ Storm → Priority 1 activates</text><text x='90' y='192' text-anchor='middle' font-size='13' fill='#94a3b8' font-family='sans-serif'>Programme total ≈ £49m</text></svg>"},
     ]
 },
@@ -10746,16 +10746,16 @@ def _render_tab_stepper(tab_key: str) -> None:
 *{{box-sizing:border-box;margin:0;padding:0;}}
 body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#fff;color:#1a252f;font-size:15px;overflow:visible;}}
 .sp{{display:none;animation:fadeUp .4s ease both;}}
-.sp.on{{display:grid;grid-template-columns:1fr 210px;gap:0;min-height:420px;}}
+.sp.on{{display:grid;grid-template-columns:1fr 210px;gap:0;min-height:460px;}}
 .af{{opacity:0;animation:fadeUp .45s ease forwards;}}
 .ar{{opacity:0;animation:slideR .4s ease forwards;}}
 .ap{{opacity:0;animation:popIn .4s ease forwards;}}
 .al{{stroke-dasharray:400;stroke-dashoffset:400;animation:drawL .8s ease forwards;}}
-.lp{{padding:22px 22px;display:flex;flex-direction:column;gap:11px;}}
+.lp{{padding:16px 20px;display:flex;flex-direction:column;gap:9px;overflow-y:auto;}}
 .rp{{background:#f8fafc;display:flex;align-items:center;justify-content:center;padding:16px;border-left:1px solid #f0f0f0;}}
 </style>
 </head><body>
-<div style='background:#fff;border-radius:14px;border:1px solid #e5e7eb;overflow:hidden;'>
+<div style='background:#fff;border-radius:14px;border:1px solid #e5e7eb;overflow:visible;'>
   <div style='background:#0f172a;padding:14px 20px;display:flex;align-items:center;gap:12px;'>
     <div style='font-size:26px;' id='he'>⚡</div>
     <div>
@@ -10814,7 +10814,7 @@ function jump(i){{cur=i;show(cur);}}
 show(0);
 </script>
 </body></html>"""
-    components.html(html, height=680, scrolling=True)
+    components.html(html, height=780, scrolling=True)
 
 
 
