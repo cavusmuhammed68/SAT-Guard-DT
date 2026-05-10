@@ -6815,6 +6815,308 @@ These are research-grade proxies. For a regulatory investment case, replace with
         use_container_width=True, hide_index=True,
     )
 
+    # ── Interactive financial loss calculator ─────────────────────────────
+    st.markdown("---")
+    st.markdown("### 🧮 Interactive financial loss calculator")
+    st.caption(
+        "Adjust the sliders to see how each component contributes to the total. "
+        "All formulas and evidence sources are shown below the chart."
+    )
+    _render_financial_loss_animation()
+
+
+def _render_financial_loss_animation() -> None:
+    """
+    Render a fully interactive financial loss breakdown animation.
+
+    Embedded as a Streamlit HTML component. Uses Chart.js for the
+    animated stacked bar, live slider-driven recalculation, and
+    inline formula + evidence documentation.
+
+    Rate constants (calibrated from UK regulatory evidence):
+        VoLL:         £17,000/MWh   — BEIS 2019 mixed D+C VoLL study
+        Customer:     £48/customer  — RAEng 2014, DNO research 2023
+        Business:     £1,100/MWh × density — CBI 2011 survey
+        Restoration:  £18,500/fault — NPg/UKPN RIIO-ED2 business plans
+        Critical svcs:£320/MWh × social_frac — NHS/CQC/BMA evidence
+
+    Duration formula:
+        duration_h = 1.5 + clip(outage_count / 6, 0, 1) × 5.5
+        ENS_MWh    = ENS_MW × duration_h
+    """
+    html_code = """
+<!doctype html>
+<html><head><meta charset="utf-8">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+     background:transparent;color:#1a252f;font-size:13px;}
+.wrap{padding:16px 0;}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;}
+.grid5{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:14px;}
+.card{background:#fff;border:0.5px solid #e0e0e0;border-radius:10px;padding:12px 14px;}
+.lbl{font-size:11px;color:#666;margin-bottom:4px;display:flex;justify-content:space-between;}
+.lbl b{color:#1a252f;font-weight:500;}
+input[type=range]{width:100%;height:4px;accent-color:#378ADD;margin:6px 0 2px;}
+.hint{font-size:10px;color:#999;}
+.total-row{display:flex;align-items:center;justify-content:space-between;
+           background:#f7f8fa;border:0.5px solid #ddd;border-radius:10px;
+           padding:12px 18px;margin-bottom:14px;}
+.total-lbl{font-size:12px;color:#555;}
+.total-sub{font-size:10px;color:#999;margin-top:2px;}
+.total-val{font-size:26px;font-weight:500;color:#1a252f;}
+.comp-lbl{font-size:10px;color:#666;line-height:1.3;margin-bottom:5px;}
+.comp-val{font-size:13px;font-weight:500;color:#1a252f;}
+.comp-pct{font-size:10px;color:#999;}
+.bar{height:7px;border-radius:3px;margin-top:5px;transition:width .35s ease;}
+.chart-wrap{position:relative;height:200px;margin-bottom:14px;}
+.formula-block{background:#f7f8fa;border-left:3px solid #378ADD;border-radius:4px;
+               padding:10px 14px;margin-bottom:8px;font-size:11.5px;line-height:1.7;}
+.formula-block code{background:#e8eef5;padding:1px 5px;border-radius:3px;
+                    font-family:'SF Mono',Menlo,monospace;font-size:11px;color:#185FA5;}
+.src-tag{display:inline-block;font-size:10px;padding:2px 7px;border-radius:4px;
+         margin-right:5px;font-weight:500;}
+.src-blue{background:#e6f1fb;color:#185FA5;}
+.src-green{background:#eaf3de;color:#3B6D11;}
+.src-amber{background:#faeeda;color:#854F0B;}
+.src-purple{background:#eeedfe;color:#3C3489;}
+.src-pink{background:#fbeaf0;color:#993556;}
+.section-title{font-size:12px;font-weight:500;color:#555;margin-bottom:8px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="grid2">
+  <div class="card">
+    <div class="lbl">Energy not supplied (MW) <b id="ens-o">150 MW</b></div>
+    <input type="range" id="ens" min="5" max="2000" step="5" value="150">
+    <div class="hint">1 MW ≈ 400 homes · ENS_MWh = MW × duration</div>
+  </div>
+  <div class="card">
+    <div class="lbl">Customers affected <b id="cust-o">1,200</b></div>
+    <input type="range" id="cust" min="50" max="25000" step="50" value="1200">
+    <div class="hint">households + businesses without power</div>
+  </div>
+  <div class="card">
+    <div class="lbl">Number of separate faults <b id="out-o">3</b></div>
+    <input type="range" id="out" min="1" max="20" step="1" value="3">
+    <div class="hint">each fault = 1 crew callout · drives duration</div>
+  </div>
+  <div class="card">
+    <div class="lbl">Commercial area density (0–1) <b id="biz-o">0.45</b></div>
+    <input type="range" id="biz" min="0" max="1" step="0.05" value="0.45">
+    <div class="hint">0 = pure residential · 1 = city centre</div>
+  </div>
+</div>
+
+<div class="card" style="margin-bottom:14px;">
+  <div class="lbl">Social vulnerability (0–100) <b id="soc-o">45</b></div>
+  <input type="range" id="soc" min="0" max="100" step="1" value="45">
+  <div class="hint">higher = more elderly, deprived, medically vulnerable residents</div>
+</div>
+
+<div class="total-row">
+  <div>
+    <div class="total-lbl">Total estimated economic loss</div>
+    <div class="total-sub" id="dur-note">Duration: 3.0 h · ENS_MWh: 450</div>
+  </div>
+  <div class="total-val" id="total-v">£0</div>
+</div>
+
+<p class="section-title">Cost breakdown by component</p>
+<div class="grid5">
+  <div class="card">
+    <div class="comp-lbl">Value of lost load (VoLL)</div>
+    <div class="comp-val" id="v-voll">£0</div>
+    <div class="comp-pct" id="p-voll">0%</div>
+    <div class="bar" style="background:#378ADD;width:0%" id="b-voll"></div>
+  </div>
+  <div class="card">
+    <div class="comp-lbl">Customer inconvenience</div>
+    <div class="comp-val" id="v-cust">£0</div>
+    <div class="comp-pct" id="p-cust">0%</div>
+    <div class="bar" style="background:#1D9E75;width:0%" id="b-cust"></div>
+  </div>
+  <div class="card">
+    <div class="comp-lbl">Business disruption</div>
+    <div class="comp-val" id="v-biz">£0</div>
+    <div class="comp-pct" id="p-biz">0%</div>
+    <div class="bar" style="background:#BA7517;width:0%" id="b-biz"></div>
+  </div>
+  <div class="card">
+    <div class="comp-lbl">Restoration &amp; repair</div>
+    <div class="comp-val" id="v-rest">£0</div>
+    <div class="comp-pct" id="p-rest">0%</div>
+    <div class="bar" style="background:#7F77DD;width:0%" id="b-rest"></div>
+  </div>
+  <div class="card">
+    <div class="comp-lbl">Critical services</div>
+    <div class="comp-val" id="v-crit">£0</div>
+    <div class="comp-pct" id="p-crit">0%</div>
+    <div class="bar" style="background:#D4537E;width:0%" id="b-crit"></div>
+  </div>
+</div>
+
+<div class="chart-wrap">
+  <canvas id="fc" role="img" aria-label="Animated stacked bar chart showing financial loss by component"></canvas>
+</div>
+
+<p class="section-title">Formulas and evidence</p>
+
+<div class="formula-block">
+  <b>Step 1 — Duration</b><br>
+  <code>duration_h = 1.5 + clip(faults / 6, 0, 1) × 5.5</code><br>
+  1.5 h minimum (fast fault clearance) → up to 7 h for major multi-fault incident.<br>
+  <code>ENS_MWh = ENS_MW × duration_h</code>
+</div>
+
+<div class="formula-block" style="border-color:#378ADD;">
+  <span class="src-tag src-blue">VoLL</span>
+  <b>ENS_MWh × £17,000/MWh</b><br>
+  Source: BEIS 2019 mixed domestic/commercial Value of Lost Load study.<br>
+  Ofgem RIIO-ED2 2022 used £16,240–£21,000/MWh in regulatory determinations.<br>
+  National Grid ESO 2023: £13,700–£23,500/MWh depending on customer mix.
+</div>
+
+<div class="formula-block" style="border-color:#1D9E75;">
+  <span class="src-tag src-green">Customer</span>
+  <b>affected_customers × £48</b><br>
+  Source: RAEng 2014 blackout cost study (£5–£50 by duration).<br>
+  Defra/BIS 2014 household survey: avg £42 for a 4-hour outage.<br>
+  DNO customer research (Northern Powergrid, UKPN) 2023: £35–£55.<br>
+  <i style="color:#999;">Not the Ofgem IIS £87 penalty — that is a regulatory incentive, not the actual cost.</i>
+</div>
+
+<div class="formula-block" style="border-color:#BA7517;">
+  <span class="src-tag src-amber">Business</span>
+  <b>ENS_MWh × £1,100 × commercial_density</b><br>
+  Source: CBI energy survey 2011 (£800–£1,500/MWh). Carbon Trust 2012 SME study: £900–£1,100/MWh.<br>
+  Density scales the rate: residential suburb (0.2) → £220/MWh effective; city centre (1.0) → £1,100/MWh.
+</div>
+
+<div class="formula-block" style="border-color:#7F77DD;">
+  <span class="src-tag src-purple">Restoration</span>
+  <b>fault_count × £18,500</b><br>
+  Source: Northern Powergrid 2023 business plan (£15,000–£25,000).<br>
+  Ofgem RIIO-ED2 final determinations: £8,000–£35,000 by fault type.<br>
+  Breakdown: crew callout £2,500 · materials £4,000 · equipment £5,000 · overhead £7,000.
+</div>
+
+<div class="formula-block" style="border-color:#D4537E;">
+  <span class="src-tag src-pink">Critical</span>
+  <b>ENS_MWh × £320 × (social_vulnerability / 100)</b><br>
+  Source: NHS England generator deployment cost (£200–£500/MWh equivalent).<br>
+  Care Quality Commission 2019: care home contingency ~£280/MWh.<br>
+  BMA 2023: home medical equipment users backup power £250–£600/MWh.<br>
+  Score 0 → £0 contribution. Score 100 → full £320/MWh applied.
+</div>
+
+<div class="formula-block" style="border-color:#888;background:#fafafa;">
+  <b>Total</b><br>
+  <code>total = (VoLL + customer + business + restoration + critical) × scenario_multiplier</code><br>
+  Scenario multipliers: Live 1.0× · Extreme wind 2.15× · Flood 2.40× · Heatwave 2.0× · Drought 2.1× · Compound 3.8× · Blackout 4.2×
+</div>
+
+</div>
+
+<script>
+const VOLL=17000,CUST=48,BIZ=1100,REST=18500,CRIT=320;
+
+function fmt(n){
+  if(n>=1e6)return'£'+(n/1e6).toFixed(2)+'m';
+  if(n>=1e3)return'£'+Math.round(n/1e3).toLocaleString()+'k';
+  return'£'+Math.round(n).toLocaleString();
+}
+function pct(n,t){return t>0?Math.round(n/t*100)+'%':'0%';}
+
+let ch=null;
+
+function calc(){
+  const ens=+document.getElementById('ens').value;
+  const cu=+document.getElementById('cust').value;
+  const ou=+document.getElementById('out').value;
+  const bz=+document.getElementById('biz').value;
+  const so=+document.getElementById('soc').value;
+
+  const dur=Math.min(7,1.5+Math.min(ou/6,1)*5.5);
+  const mwh=ens*dur;
+
+  const voll=mwh*VOLL;
+  const cust=cu*CUST;
+  const bizd=mwh*BIZ*bz;
+  const rest=ou*REST;
+  const crit=mwh*CRIT*(so/100);
+  const tot=voll+cust+bizd+rest+crit;
+
+  document.getElementById('ens-o').textContent=Math.round(ens)+' MW';
+  document.getElementById('cust-o').textContent=cu.toLocaleString();
+  document.getElementById('out-o').textContent=Math.round(ou);
+  document.getElementById('biz-o').textContent=bz.toFixed(2);
+  document.getElementById('soc-o').textContent=Math.round(so);
+  document.getElementById('dur-note').textContent=
+    'Duration: '+dur.toFixed(1)+' h · Energy unserved: '+Math.round(mwh).toLocaleString()+' MWh';
+  document.getElementById('total-v').textContent=fmt(tot);
+
+  const cs=[voll,cust,bizd,rest,crit];
+  const ids=['voll','cust','biz','rest','crit'];
+  cs.forEach((v,i)=>{
+    document.getElementById('v-'+ids[i]).textContent=fmt(v);
+    document.getElementById('p-'+ids[i]).textContent=pct(v,tot);
+    document.getElementById('b-'+ids[i]).style.width=(tot>0?Math.round(v/tot*100):0)+'%';
+  });
+
+  if(ch){
+    ch.data.datasets.forEach((ds,i)=>{ds.data=[Math.round(cs[i]/1000)];});
+    ch.update('none');
+  }
+}
+
+['ens','cust','out','biz','soc'].forEach(id=>{
+  document.getElementById(id).addEventListener('input',calc);
+});
+
+window.addEventListener('load',()=>{
+  const ctx=document.getElementById('fc').getContext('2d');
+  ch=new Chart(ctx,{
+    type:'bar',
+    data:{
+      labels:[''],
+      datasets:[
+        {label:'VoLL (£17k/MWh)',         data:[0],backgroundColor:'#378ADD',stack:'s'},
+        {label:'Customer (£48 each)',      data:[0],backgroundColor:'#1D9E75',stack:'s'},
+        {label:'Business (£1,100/MWh×d)', data:[0],backgroundColor:'#BA7517',stack:'s'},
+        {label:'Restoration (£18,500/fault)',data:[0],backgroundColor:'#7F77DD',stack:'s'},
+        {label:'Critical svcs (£320/MWh)', data:[0],backgroundColor:'#D4537E',stack:'s'},
+      ]
+    },
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      indexAxis:'y',
+      animation:{duration:350,easing:'easeOutQuart'},
+      plugins:{
+        legend:{display:true,position:'bottom',
+          labels:{font:{size:11},boxWidth:11,padding:12,color:'#555'}
+        },
+        tooltip:{callbacks:{
+          label:c=>' '+c.dataset.label+': £'+c.parsed.x.toLocaleString()+'k'
+        }}
+      },
+      scales:{
+        x:{stacked:true,grid:{color:'rgba(0,0,0,0.06)'},
+           ticks:{callback:v=>'£'+v+'k',font:{size:11},color:'#777'}},
+        y:{stacked:true,display:false}
+      }
+    }
+  });
+  calc();
+});
+</script>
+</body></html>
+"""
+    components.html(html_code, height=1180, scrolling=False)
+
 
 # =============================================================================
 # TAB: INVESTMENT ENGINE (POSTCODE RESILIENCE)
