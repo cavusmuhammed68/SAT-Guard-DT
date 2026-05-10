@@ -1,5 +1,5 @@
 """
-SAT-Guard Advanced Streamlit Dashboard — Q1 Final Edition
+SAT-Guard Advanced Streamlit Dashboard 
 ==========================================================
 PART 1 of 10 — Page config, global CSS, all configuration constants
 
@@ -2686,7 +2686,7 @@ def hazard_resilience_score(
             "finance_penalty": round(finance_pen, 2),
             "risk_penalty":    round(risk_pen,    2),
         },
-        "model_version": "Q1-calibrated socio-technical hazard resilience model v4",
+        "model_version": "Calibrated socio-technical hazard resilience model v4",
     }
 
 
@@ -3035,7 +3035,7 @@ def build_ev_v2g_analysis(places: pd.DataFrame, scenario: str) -> pd.DataFrame:
 
 def monte_carlo_q1(row: Dict[str, Any], simulations: int = 1000) -> Dict[str, Any]:
     """
-    Q1-grade correlated Monte Carlo simulation for a single place.
+    Correlated Monte Carlo simulation for a single place.
 
     Key improvements over independent-variable MC:
 
@@ -3068,14 +3068,14 @@ def monte_carlo_q1(row: Dict[str, Any], simulations: int = 1000) -> Dict[str, An
         due to floating-point index truncation.
 
     Outputs:
-        q1_mc_risk_mean:       mean risk score across simulations
-        q1_mc_risk_p95:        95th percentile risk score
-        q1_mc_failure_mean:    mean failure probability
-        q1_mc_failure_p95:     95th percentile failure probability
-        q1_mc_loss_mean_gbp:   mean financial loss
-        q1_mc_loss_p95_gbp:    95th percentile financial loss
-        q1_mc_loss_cvar95_gbp: CVaR95 (expected loss given exceeding P95)
-        q1_mc_histogram:       first 500 risk samples for histogram plotting
+        mc_risk_mean:       mean risk score across simulations
+        mc_risk_p95:        95th percentile risk score
+        mc_failure_mean:    mean failure probability
+        mc_failure_p95:     95th percentile failure probability
+        mc_loss_mean_gbp:   mean financial loss
+        mc_loss_p95_gbp:    95th percentile financial loss
+        mc_loss_cvar95_gbp: CVaR95 (expected loss given exceeding P95)
+        mc_histogram:       first 500 risk samples for histogram plotting
     """
     simulations = int(clamp(simulations, 100, 5000))
     rng = np.random.default_rng()
@@ -3121,19 +3121,19 @@ def monte_carlo_q1(row: Dict[str, Any], simulations: int = 1000) -> Dict[str, An
     cvar95        = float(np.mean(exceedance)) if len(exceedance) > 0 else p95_threshold
 
     return {
-        "q1_mc_risk_mean":       round(float(np.mean(risk)),            2),
-        "q1_mc_risk_p95":        round(float(np.percentile(risk, 95)),  2),
-        "q1_mc_failure_mean":    round(float(np.mean(fail_prob)),       4),
-        "q1_mc_failure_p95":     round(float(np.percentile(fail_prob, 95)), 4),
-        "q1_mc_loss_mean_gbp":   round(float(np.mean(loss)),            2),
-        "q1_mc_loss_p95_gbp":    round(float(np.percentile(loss, 95)),  2),
-        "q1_mc_loss_cvar95_gbp": round(cvar95,                          2),
-        "q1_mc_histogram":       [round(float(v), 2) for v in risk[:500]],
+        "mc_risk_mean":       round(float(np.mean(risk)),            2),
+        "mc_risk_p95":        round(float(np.percentile(risk, 95)),  2),
+        "mc_failure_mean":    round(float(np.mean(fail_prob)),       4),
+        "mc_failure_p95":     round(float(np.percentile(fail_prob, 95)), 4),
+        "mc_loss_mean_gbp":   round(float(np.mean(loss)),            2),
+        "mc_loss_p95_gbp":    round(float(np.percentile(loss, 95)),  2),
+        "mc_loss_cvar95_gbp": round(cvar95,                          2),
+        "mc_histogram":       [round(float(v), 2) for v in risk[:500]],
     }
 
 
 def build_q1_mc_table(places: pd.DataFrame, simulations: int) -> pd.DataFrame:
-    """Run Q1 Monte Carlo for every place, return sorted summary DataFrame."""
+    """Run Monte Carlo for every place, return sorted summary DataFrame."""
     rows: List[Dict[str, Any]] = []
     for _, r in places.iterrows():
         out = monte_carlo_q1(r.to_dict(), simulations)
@@ -3142,7 +3142,7 @@ def build_q1_mc_table(places: pd.DataFrame, simulations: int) -> pd.DataFrame:
         rows.append(out)
     return (
         pd.DataFrame(rows)
-        .sort_values("q1_mc_risk_p95", ascending=False)
+        .sort_values("mc_risk_p95", ascending=False)
         .reset_index(drop=True)
     )
 
@@ -3161,7 +3161,7 @@ def advanced_monte_carlo(
     Per-place Monte Carlo with independent perturbations.
 
     Used inside build_places() to populate mc_p05/p50/p95 columns.
-    For correlated analysis, use monte_carlo_q1() in the Monte Carlo tab.
+    For correlated analysis, use monte_carlo() in the Monte Carlo tab.
 
     Perturbations:
         wind:   × LogNormal(0, 0.16)
@@ -3379,7 +3379,7 @@ def validate_model_transparency(
         6. Natural hazard coverage: all 5 hazard types present
         7. No circular hazard: compound_hazard_proxy is present
         8. Grid failure realism: mean grid failure < 10% in live mode
-        9. CVaR95 correctness: always pass (formula is in monte_carlo_q1)
+        9. CVaR95 correctness: always pass (formula is in monte_carlo)
        10. EV/V2G coverage: v2g_support_mw column exists
     """
     checks: List[Dict[str, str]] = []
@@ -3413,7 +3413,7 @@ def validate_model_transparency(
             "evidence": f"Mean grid_failure_probability = {round(mean_gf*100,2)}%. Target: < 10% in live mode."})
 
     checks.append({"check": "CVaR95 formula correctness", "result": "Pass",
-        "evidence": "CVaR95 = mean(loss | loss >= P95_threshold). Exceedance-mean formula used in monte_carlo_q1()."})
+        "evidence": "CVaR95 = mean(loss | loss >= P95_threshold). Exceedance-mean formula used in monte_carlo()."})
 
     checks.append({"check": "EV/V2G coverage present", "result": "Pass" if "v2g_support_mw" in places.columns else "Warning",
         "evidence": "v2g_support_mw, grid_storage_mw, total_storage_support computed per place."})
@@ -6780,7 +6780,7 @@ def render_improved_monte_carlo_tab(
     """
     Monte Carlo Simulation tab.
 
-    Uses the Q1-grade correlated Monte Carlo model (monte_carlo_q1) which:
+    Uses the correlated Monte Carlo model (monte_carlo) which:
     - Uses a shared storm-shock variable to correlate wind/rain/outage/ENS
     - Applies triangular demand distribution
     - Uses lognormal restoration-cost tails
@@ -6797,14 +6797,14 @@ def render_improved_monte_carlo_tab(
     """
     st.subheader("Monte Carlo simulation: correlated storm, demand and restoration-cost uncertainty")
 
-    with st.spinner(f"Running Q1 Monte Carlo ({simulations:,} simulations per place)..."):
+    with st.spinner(f"Running Monte Carlo ({simulations:,} simulations per place)..."):
         q1mc = build_q1_mc_table(places, simulations)
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("P95 risk max",     f"{q1mc['q1_mc_risk_p95'].max():.1f}/100",
+    c1.metric("P95 risk max",     f"{q1mc['mc_risk_p95'].max():.1f}/100",
               q1mc.loc[q1mc['q1_mc_risk_p95'].idxmax(), 'place'])
-    c2.metric("Mean failure max", f"{q1mc['q1_mc_failure_mean'].max()*100:.1f}%")
-    c3.metric("CVaR95 loss max",  money_m(q1mc["q1_mc_loss_cvar95_gbp"].max()))
+    c2.metric("Mean failure max", f"{q1mc['mc_failure_mean'].max()*100:.1f}%")
+    c3.metric("CVaR95 loss max",  money_m(q1mc["mc_loss_cvar95_gbp"].max()))
     c4.metric("Simulations each", f"{simulations:,}")
 
     # ── Row 1: scatter + histogram ────────────────────────────────────────
@@ -6812,19 +6812,19 @@ def render_improved_monte_carlo_tab(
     with a:
         fig = px.scatter(
             q1mc,
-            x="q1_mc_risk_mean",
-            y="q1_mc_risk_p95",
-            size="q1_mc_loss_cvar95_gbp",
-            color="q1_mc_failure_p95",
+            x="mc_risk_mean",
+            y="mc_risk_p95",
+            size="mc_loss_cvar95_gbp",
+            color="mc_failure_p95",
             hover_name="place",
             title="Mean risk vs P95 risk (bubble size = CVaR95 loss)",
             template=plotly_template(),
             color_continuous_scale="Turbo",
             labels={
-                "q1_mc_risk_mean":       "Mean risk (0–100)",
-                "q1_mc_risk_p95":        "P95 risk (0–100)",
-                "q1_mc_failure_p95":     "P95 failure prob.",
-                "q1_mc_loss_cvar95_gbp": "CVaR95 loss (£)",
+                "mc_risk_mean":       "Mean risk (0–100)",
+                "mc_risk_p95":        "P95 risk (0–100)",
+                "mc_failure_p95":     "P95 failure prob.",
+                "mc_loss_cvar95_gbp": "CVaR95 loss (£)",
             },
         )
         fig.update_layout(height=430, margin=dict(l=10,r=10,t=55,b=10))
@@ -6839,7 +6839,7 @@ def render_improved_monte_carlo_tab(
 
     with b:
         worst_row = q1mc.iloc[0]
-        hist_data = worst_row.get("q1_mc_histogram", [])
+        hist_data = worst_row.get("mc_histogram", [])
         fig = px.histogram(
             x=hist_data, nbins=32,
             title=f"Risk distribution — {worst_row['place']} (worst P95)",
@@ -6847,15 +6847,15 @@ def render_improved_monte_carlo_tab(
             template=plotly_template(),
         )
         fig.add_vline(
-            x=worst_row["q1_mc_risk_mean"],
+            x=worst_row["mc_risk_mean"],
             line_dash="dash", line_color="#38bdf8",
-            annotation_text=f"Mean: {worst_row['q1_mc_risk_mean']:.1f}",
+            annotation_text=f"Mean: {worst_row['mc_risk_mean']:.1f}",
             annotation_font_size=11,
         )
         fig.add_vline(
-            x=worst_row["q1_mc_risk_p95"],
+            x=worst_row["mc_risk_p95"],
             line_dash="dash", line_color="#ef4444",
-            annotation_text=f"P95: {worst_row['q1_mc_risk_p95']:.1f}",
+            annotation_text=f"P95: {worst_row['mc_risk_p95']:.1f}",
             annotation_font_size=11,
         )
         fig.update_layout(height=430, margin=dict(l=10,r=10,t=55,b=10))
@@ -6864,16 +6864,16 @@ def render_improved_monte_carlo_tab(
     # ── Row 2: loss comparison ────────────────────────────────────────────
     c, d = st.columns(2)
     with c:
-        loss_df = q1mc[["place","q1_mc_loss_mean_gbp","q1_mc_loss_p95_gbp","q1_mc_loss_cvar95_gbp"]].copy()
+        loss_df = q1mc[["place","mc_loss_mean_gbp","mc_loss_p95_gbp","mc_loss_cvar95_gbp"]].copy()
         loss_melt = loss_df.melt(
             id_vars="place",
-            value_vars=["q1_mc_loss_mean_gbp","q1_mc_loss_p95_gbp","q1_mc_loss_cvar95_gbp"],
+            value_vars=["mc_loss_mean_gbp","mc_loss_p95_gbp","mc_loss_cvar95_gbp"],
             var_name="metric", value_name="loss_gbp",
         )
         loss_melt["metric"] = loss_melt["metric"].map({
-            "q1_mc_loss_mean_gbp":   "Mean loss",
-            "q1_mc_loss_p95_gbp":    "P95 loss",
-            "q1_mc_loss_cvar95_gbp": "CVaR95 loss",
+            "mc_loss_mean_gbp":   "Mean loss",
+            "mc_loss_p95_gbp":    "P95 loss",
+            "mc_loss_cvar95_gbp": "CVaR95 loss",
         })
         fig = px.bar(
             loss_melt, x="place", y="loss_gbp",
@@ -6887,9 +6887,9 @@ def render_improved_monte_carlo_tab(
 
     with d:
         # Failure probability distribution
-        fail_df = q1mc[["place","q1_mc_failure_mean","q1_mc_failure_p95"]].copy()
-        fail_df["mean_%"]  = (fail_df["q1_mc_failure_mean"] * 100).round(2)
-        fail_df["p95_%"]   = (fail_df["q1_mc_failure_p95"]  * 100).round(2)
+        fail_df = q1mc[["place","mc_failure_mean","mc_failure_p95"]].copy()
+        fail_df["mean_%"]  = (fail_df["mc_failure_mean"] * 100).round(2)
+        fail_df["p95_%"]   = (fail_df["mc_failure_p95"]  * 100).round(2)
         fail_melt = fail_df[["place","mean_%","p95_%"]].melt(
             id_vars="place", var_name="metric", value_name="failure_%"
         )
@@ -6907,7 +6907,7 @@ def render_improved_monte_carlo_tab(
     st.markdown(
         """
         <div class="note">
-        <b>Monte Carlo model design (Q1 correlated):</b><br><br>
+        <b>Monte Carlo model design (Correlated):</b><br><br>
 
         <b>1. Shared storm shock:</b>
         <code>storm_shock ~ N(0,1)</code> — the same random variable drives wind,
@@ -6936,7 +6936,7 @@ def render_improved_monte_carlo_tab(
 
     st.markdown("#### Full Monte Carlo results table")
     st.dataframe(
-        q1mc.drop(columns=["q1_mc_histogram"]),
+        q1mc.drop(columns=["mc_histogram"]),
         use_container_width=True, hide_index=True,
     )
 
@@ -6950,7 +6950,7 @@ def monte_carlo_tab(places: pd.DataFrame) -> None:
     Simple per-place Monte Carlo tab (uses mc_histogram from build_places).
 
     Shows per-place MC statistics computed during the main data pipeline.
-    For the correlated Q1 model, see render_improved_monte_carlo_tab.
+    For the correlated model, see render_improved_monte_carlo_tab.
     """
     st.subheader("Per-place Monte Carlo (independent perturbations)")
 
@@ -7050,7 +7050,7 @@ def render_validation_tab(places: pd.DataFrame, scenario: str) -> None:
     if fail_count == 0 and warning_count == 0:
         st.markdown(
             '<div class="success-box">All validation checks passed. '
-            'The model meets Q1 transparency and calibration standards.</div>',
+            'The model meets transparency and calibration standards.</div>',
             unsafe_allow_html=True,
         )
     elif fail_count > 0:
@@ -7287,7 +7287,7 @@ def method_tab(places: pd.DataFrame) -> None:
     )
 
     # ── Monte Carlo ───────────────────────────────────────────────────────
-    st.markdown("### 7. Q1 Monte Carlo (correlated storm-shock)")
+    st.markdown("### 7. Monte Carlo (correlated storm-shock)")
     st.markdown(
         """
         <div class="formula">
@@ -7425,7 +7425,7 @@ The sunburst shows the loss structure by place and component. The funding
 priority table applies the seven-criteria prioritisation formula.
 
 **Monte Carlo**
-The Q1 correlated Monte Carlo model. Uses a shared storm shock so wind, rain,
+The correlated Monte Carlo model. Uses a shared storm shock so wind, rain,
 outage count and ENS co-move realistically. Shows mean, P95 and CVaR95 loss.
 CVaR95 uses the correct exceedance-mean formula.
 
@@ -7801,7 +7801,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     with st.sidebar:
         st.markdown("## ⚡ SAT-Guard")
-        st.caption("Digital Twin Control Panel — Q1 Final Edition")
+        st.caption("Digital Twin Control Panel")
         st.markdown("---")
 
         region = st.selectbox(
@@ -7814,8 +7814,8 @@ def main() -> None:
             help="Number of Monte Carlo iterations in the main data pipeline.",
         )
         q1_mc_runs = st.slider(
-            "Q1 MC simulations", 200, 5000, 1000, 100,
-            help="Simulations for the correlated Q1 Monte Carlo tab. Higher = more accurate tail estimates.",
+            "MC simulations", 200, 5000, 1000, 100,
+            help="Simulations for the correlated Monte Carlo tab. Higher = more accurate tail estimates.",
         )
 
         st.markdown("---")
