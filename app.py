@@ -10172,501 +10172,291 @@ _SVG_EXPORT = """
 
 # ─── Master brief renderer ──────────────────────────────────────────────────
 
-def render_tab_brief(tab_key: str) -> None:
-    """
-    Render the academic brief expander for a given tab.
-
-    Call this at the very TOP of each tab render function.
-    The expander is collapsed by default and does not distract from
-    the main content when not needed.
-    """
-    BRIEFS = {
+def _get_briefs() -> dict:
+    """Return the BRIEFS dictionary keyed by tab_key."""
+    return {
         "overview": dict(
             tab_number=0, tab_name="Executive Overview",
             tag="Situational awareness", tag_color="#e3f2fd", tag_text_color="#185FA5",
-            subtitle=(
-                "Provides a single-screen operational summary of regional grid risk, resilience "
-                "and social vulnerability. The primary entry point for any briefing or presentation."
-            ),
-            what_did=(
-                "Built a multi-layer risk scoring model combining weather intensity (wind, rain, "
-                "temperature, humidity, cloud), air quality (AQI, PM2.5), net load pressure "
-                "(demand minus renewable generation), nearby outage intensity and Energy Not "
-                "Supplied. Output: a 0–100 risk score per place."
-            ),
-            what_result=(
-                "Under live calm winter conditions: regional risk ≈ 10.9/100 (Low), "
-                "resilience ≈ 77/100 (Functional), grid failure probability ≈ 0.5–1.5%. "
-                "All figures are consistent with UK network statistics from Ofgem RIIO-ED2."
-            ),
-            why_matters=(
-                "Decision-makers need a single aggregated risk signal that integrates physical "
-                "hazard, system state and social exposure without requiring expertise in each "
-                "domain. This tab provides that, with drill-down available in all other tabs."
-            ),
+            subtitle="Provides a single-screen operational summary of regional grid risk, resilience and social vulnerability.",
+            what_did="Built a multi-layer risk scoring model combining weather intensity (wind, rain, temperature, humidity, cloud), air quality (AQI, PM2.5), net load pressure (demand minus renewable generation), nearby outage intensity and Energy Not Supplied. Output: a 0–100 risk score per place.",
+            what_result="Under live calm winter conditions: regional risk ≈ 10.9/100 (Low), resilience ≈ 77/100 (Functional), grid failure probability ≈ 0.5–1.5%. All figures consistent with Ofgem RIIO-ED2 statistics.",
+            why_matters="Decision-makers need a single aggregated risk signal integrating physical hazard, system state and social exposure without requiring domain expertise. This tab provides that, with drill-down available in all other tabs.",
             pills=["Multi-layer model","5 risk layers","Calm-weather guard","Social vulnerability","Live API"],
-            pill_color="#185FA5",
-            refs="Risk formula: weather(57)+pollution(15)+net_load(10)+outage(16)+ENS(14). "
-                 "Calm guard: risk capped at 36/100 when wind&lt;24 km/h, rain&lt;2 mm/h, outages≤3.",
+            pill_color="#185FA5", refs="Risk: weather(57)+pollution(15)+net_load(10)+outage(16)+ENS(14). Calm guard: capped 36/100 when wind<24, rain<2, outages≤3.",
             svg_or_html=_SVG_OVERVIEW,
         ),
         "simulation": dict(
             tab_number=1, tab_name="Hazard Simulation",
-            tag="Animated broadcast", tag_color="#020f1e", tag_text_color="#aee2ff",
-            subtitle=(
-                "A BBC/WXCharts-inspired animated canvas showing how meteorological hazards "
-                "propagate across the region in real time, with scenario-aware intensity."
-            ),
-            what_did=(
-                "Built a multi-layer HTML5 Canvas animation with 6 rendering passes: "
-                "backdrop → pressure contours → precipitation shields → frontal boundaries → "
-                "wind vectors → city labels. Each layer updates at 60fps using "
-                "requestAnimationFrame with shared state from the 12-frame forecast payload."
-            ),
-            what_result=(
-                "Smooth real-time animation showing weather evolution over 24 hours. "
-                "Storm mode activates 155 wind arrows, 55 rain bands, 3 vortices and "
-                "lightning flash events. Risk scores update in the stats bar every frame."
-            ),
-            why_matters=(
-                "Situational awareness in emergency management benefits from dynamic rather "
-                "than static visualisation. Animated hazard overlays help operators identify "
-                "propagation direction, frontal passage timing and compound event formation."
-            ),
+            tag="Animated broadcast", tag_color="#0a1726", tag_text_color="#aee2ff",
+            subtitle="A BBC/WXCharts-inspired animated canvas showing how meteorological hazards propagate across the region in real time.",
+            what_did="Built a 6-layer HTML5 Canvas animation: backdrop → pressure contours → precipitation shields → frontal boundaries → wind vectors → city labels. Each layer updates at 60fps. Scenario-aware intensity: storm mode activates 155 wind arrows, 55 rain bands, 3 vortices and lightning flashes.",
+            what_result="Smooth 24-hour forecast animation. Risk scores update live in the stats bar. Storm Arwen-level wind scenario produces visually distinct hazard patterns vs calm baseline.",
+            why_matters="Animated hazard overlays help operators identify propagation direction, frontal passage timing and compound event formation — critical for emergency management situational awareness.",
             pills=["Canvas API","6 render layers","12-frame forecast","Storm physics","Real-time stats"],
-            pill_color="#38bdf8",
-            refs="Animation: requestAnimationFrame loop, dt-based physics, shared storm shock. "
-                 "Hazard modes: wind/rain/heat/calm/blackout/storm. City labels via DOM overlay.",
+            pill_color="#38bdf8", refs="Animation: requestAnimationFrame loop, dt-based physics, shared storm shock. Hazard modes: wind/rain/heat/calm/blackout/storm.",
             svg_or_html=_SVG_SIMULATION,
         ),
         "hazards": dict(
             tab_number=2, tab_name="Natural Hazard Resilience",
             tag="Multi-hazard analysis", tag_color="#e8f5e9", tag_text_color="#1B5E20",
-            subtitle=(
-                "Evaluates grid resilience separately for five natural hazard types across "
-                "all postcode districts. Identifies which hazard/location combinations are "
-                "most fragile and explains why."
-            ),
-            what_did=(
-                "Built a hazard stressor model that converts each meteorological driver into "
-                "a 0–100 stress score using linear interpolation between threshold bounds. "
-                "Applied a penalty-based resilience formula (base 88) deducting for hazard "
-                "stress, social vulnerability, outage clustering, ENS and financial exposure. "
-                "Calm-weather adjustment: weather_factor=0.25, floor=68."
-            ),
-            what_result=(
-                "Lowest resilience: 54.4/100 (Stressed — no Fragile cases in calm conditions). "
-                "Mean: 75.1/100 (Functional). Compound hazard is typically the most stressful "
-                "dimension because it aggregates wind, rain, AQI and outage signals simultaneously."
-            ),
-            why_matters=(
-                "Different hazard types require different engineering responses. A location that "
-                "is resilient to wind but fragile under compound events needs different investment "
-                "than one with uniform vulnerability. The matrix enables hazard-specific planning."
-            ),
-            pills=["5 hazard types","Stressor formula","Penalty model","Calm adjustment","Matrix view"],
-            pill_color="#1D9E75",
-            refs="Hazard types: Wind storm (25–55 km/h), Flood (1.5–8 mm/h), Drought (renewable_fail 0.35–0.75), "
-                 "Heat/AQI (35–95), Compound (wind+rain+AQI+outages). Base=88, calm floor=68.",
+            subtitle="Evaluates grid resilience separately for five natural hazard types across all postcode districts.",
+            what_did="Built a hazard stressor model converting each meteorological driver into a 0–100 stress score. Applied a penalty-based resilience formula (base 88) deducting for hazard stress, social vulnerability, outage clustering, ENS and financial exposure. Calm-weather adjustment: weather_factor=0.25, floor=68.",
+            what_result="Lowest resilience: 54.4/100 (Stressed). Mean: 75.1/100 (Functional). Zero Fragile cases in calm conditions. Compound hazard is typically most stressful as it aggregates all signals simultaneously.",
+            why_matters="Different hazards require different engineering responses. The matrix enables hazard-specific investment planning — a location fragile to compound events but resilient to wind needs different action than one with uniform vulnerability.",
+            pills=["5 hazard types","Stressor formula","Penalty model","Calm adjustment","Matrix heatmap"],
+            pill_color="#1D9E75", refs="Hazards: Wind (25–55 km/h), Flood (1.5–8 mm/h), Drought (renew_fail 0.35–0.75), Heat/AQI (35–95), Compound. Base=88, calm floor=68.",
             svg_or_html=_SVG_HAZARD,
         ),
         "iod": dict(
             tab_number=3, tab_name="IoD2025 Socio-Economic",
             tag="Deprivation data integration", tag_color="#fbeaf0", tag_text_color="#993556",
-            subtitle=(
-                "Integrates official government deprivation data (Index of Deprivation 2025) "
-                "with the grid model to produce area-level social vulnerability scores that "
-                "reflect residents' capacity to cope with power disruptions."
-            ),
-            what_did=(
-                "Built an automatic Excel scanner that searches 15 filesystem paths for IoD2025 "
-                "files and extracts 9 deprivation domain scores (income, employment, health, "
-                "education, crime, housing, living environment, IDACI, IDAOPI) per LAD. "
-                "Matched each configured city using a 4-level hierarchy: "
-                "exact LAD name → partial token → regional aggregate → fallback proxy."
-            ),
-            what_result=(
-                "296 LAD records loaded, all 6 configured places matched (exact match). "
-                "Newcastle upon Tyne IoD composite: ~44/100 (moderate deprivation). "
-                "Blended social vulnerability: 0.70 × IoD2025 + 0.30 × fallback = 40–44/100."
-            ),
-            why_matters=(
-                "Power cuts affect deprived communities disproportionately: lower ability to "
-                "self-recover, more reliance on medical equipment, fewer financial buffers. "
-                "Equity-weighted resilience models are increasingly required by Ofgem for "
-                "DNO business plan submissions under RIIO-ED2 vulnerability frameworks."
-            ),
-            pills=["IoD2025","9 domains","LAD matching","Social blending","DLUHC data"],
-            pill_color="#D4537E",
-            refs="Source: DLUHC English Indices of Deprivation 2025. "
-                 "Blending: 0.70×IoD2025_composite + 0.30×(0.40×density_n + 0.60×IMD). "
-                 "IMD higher = MORE deprived (rank inversion applied).",
+            subtitle="Integrates official government deprivation data (IoD2025) to produce area-level social vulnerability scores.",
+            what_did="Built an automatic Excel scanner for IoD2025 files extracting 9 deprivation domain scores per LAD. Matched each configured city using a 4-level hierarchy: exact LAD name → partial token → regional aggregate → fallback proxy. Blended IoD2025 composite (70%) with density/IMD fallback (30%).",
+            what_result="296 LAD records loaded, all 6 cities matched (exact). Newcastle upon Tyne IoD composite ≈ 44/100. Blended social vulnerability: 40–44/100.",
+            why_matters="Power cuts affect deprived communities disproportionately. Equity-weighted resilience models are increasingly required by Ofgem for DNO RIIO-ED2 vulnerability framework submissions.",
+            pills=["IoD2025","9 domains","LAD matching","0.70/0.30 blend","DLUHC data"],
+            pill_color="#D4537E", refs="Blend: 0.70×IoD2025_composite + 0.30×(0.40×density + 0.60×IMD). IMD higher = MORE deprived (rank inversion applied). Source: DLUHC 2025.",
             svg_or_html=_SVG_IOD,
         ),
         "map": dict(
             tab_number=4, tab_name="Grid Intelligence Map",
-            tag="Geospatial choropleth", tag_color="#f0f4ff", tag_text_color="#1565c0",
-            subtitle=(
-                "Renders real UK postcode district boundaries as a choropleth map coloured "
-                "by IDW-interpolated risk score — the granular multi-colour style of a "
-                "professional administrative atlas."
-            ),
-            what_did=(
-                "Fetched real UK postcode boundary GeoJSON from missinglink/uk-postcode-polygons "
-                "(public domain). For each of the 122 North East or 196 Yorkshire postcode districts, "
-                "computed the risk score using inverse-distance-weighted interpolation from the "
-                "6 configured places. Mapped the score to a continuous 8-stop pastel gradient."
-            ),
-            what_result=(
-                "39 unique colour tones across 59 NE postcode districts (NE1–NE46, SR1–SR8 etc.). "
-                "Granular multi-colour appearance matching professional UK postcode atlas style. "
-                "Light carto-positron basemap, dark 0.6px district boundaries, red city markers."
-            ),
-            why_matters=(
-                "Stakeholders and regulators understand maps at local authority / postcode level. "
-                "A choropleth at this granularity communicates spatial risk patterns more "
-                "effectively than point markers or coarse authority polygons."
-            ),
-            pills=["Real GeoJSON","IDW interpolation","Pastel choropleth","122 districts","carto-positron"],
-            pill_color="#1565c0",
-            refs="Source: missinglink/uk-postcode-polygons (GitHub, public domain). "
-                 "IDW: risk = Σ(place_risk/d²) / Σ(1/d²), min distance 0.5 km. "
-                 "Gradient: pale blue (0) → pale green → yellow → orange → pink → purple (100).",
+            tag="Geospatial choropleth", tag_color="#e8eef8", tag_text_color="#1565c0",
+            subtitle="Renders real UK postcode district boundaries as a choropleth coloured by IDW-interpolated risk score.",
+            what_did="Fetched real UK postcode boundary GeoJSON from missinglink/uk-postcode-polygons. For each of 122 North East (or 196 Yorkshire) districts, computed risk via inverse-distance-weighted interpolation from 6 configured places. Mapped to an 8-stop continuous pastel gradient.",
+            what_result="39 unique colour tones across 59 NE postcode districts. Professional atlas-style appearance with light carto-positron basemap, thin district boundaries and red city markers.",
+            why_matters="Stakeholders understand maps at postcode level. A granular choropleth communicates spatial risk patterns more effectively than point markers or coarse authority polygons.",
+            pills=["Real GeoJSON","IDW interpolation","Pastel gradient","122 districts","carto-positron"],
+            pill_color="#1565c0", refs="Source: missinglink/uk-postcode-polygons (public domain). IDW: risk=Σ(place_risk/d²)/Σ(1/d²), min dist 0.5 km. Gradient: pale blue→green→yellow→orange→pink→purple.",
             svg_or_html=_SVG_MAP,
         ),
         "resilience": dict(
             tab_number=5, tab_name="Resilience Analysis",
             tag="Infrastructure robustness", tag_color="#e8f5e9", tag_text_color="#1B5E20",
-            subtitle=(
-                "Decomposes the resilience index for each location, shows the interdependency "
-                "cascade across power, water, telecom, transport and social sectors, and "
-                "identifies where resilience is degraded relative to the UK baseline."
-            ),
-            what_did=(
-                "Computed a resilience index (15–100) as a penalty-deducted score from a base "
-                "of 92, applying weighted penalties for risk, social vulnerability, grid failure "
-                "probability, renewable intermittency, cascade stress and financial exposure. "
-                "Modelled infrastructure cascade using power-law interdependency coefficients."
-            ),
-            what_result=(
-                "Average resilience 77/100 (Functional) under live conditions. "
-                "No Fragile areas in calm weather — consistent with UK network SAIDI targets. "
-                "Cascade radar shows water and social sectors most exposed in storm scenarios."
-            ),
-            why_matters=(
-                "Resilience is distinct from reliability: a network can have low fault rate "
-                "(high reliability) but slow restoration (low resilience). The formula captures "
-                "both dimensions via grid failure probability and financial exposure components."
-            ),
+            subtitle="Decomposes the resilience index for each location and shows the interdependency cascade across all infrastructure sectors.",
+            what_did="Computed resilience (15–100) as a penalty-deducted score from base 92, applying weighted penalties for risk, social vulnerability, grid failure, renewable intermittency, cascade stress and financial exposure. Modelled infrastructure cascade using power-law interdependency coefficients (Panteli & Mancarella 2015).",
+            what_result="Average resilience 77/100 (Functional). No Fragile areas in calm weather — consistent with UK SAIDI targets. Cascade radar shows water and social sectors most exposed in storm scenarios.",
+            why_matters="Resilience differs from reliability: a network can have low fault rate but slow restoration. The formula captures both via grid failure probability and financial exposure.",
             pills=["Base 92","6 penalties","Cascade model","Power-law","SAIDI calibrated"],
-            pill_color="#27ae60",
-            refs="Resilience = 92 − 0.28×risk − 0.11×social − 9×grid_fail − 5×renew_fail "
-                 "− 7×system_stress − finance_penalty. "
-                 "Cascade: water=power^1.35×0.74, telecom=power^1.22×0.82. "
-                 "After: Panteli and Mancarella (2015) resilience framework.",
+            pill_color="#27ae60", refs="resilience=92−0.28×risk−0.11×social−9×gf−5×rf−7×ss−finance_pen. Cascade: water=power^1.35×0.74, telecom=power^1.22×0.82.",
             svg_or_html=_SVG_RESILIENCE,
         ),
         "failure": dict(
             tab_number=6, tab_name="Failure & Investment",
             tag="Risk-based prioritisation", tag_color="#fff3e0", tag_text_color="#854F0B",
-            subtitle=(
-                "Applies a calibrated logistic failure probability model and translates "
-                "failure risk into actionable investment priorities with indicative costs."
-            ),
-            what_did=(
-                "Built an enhanced logistic failure model (z-score architecture) that combines "
-                "baseline failure, grid failure, renewable intermittency, social vulnerability, "
-                "outage clustering, ENS, hazard stress and weather variables into a single "
-                "probability estimate. Applied a calm-weather guard (×0.35, cap 18%) for "
-                "realistic UK operating conditions. Generated investment recommendation scores "
-                "and indicative programme costs per postcode."
-            ),
-            what_result=(
-                "Max failure probability 6.2% in calm conditions (Low level — correct). "
-                "Priority 1 = 0 under live conditions (all rec scores &lt; 75). "
-                "Programme cost £46m = 140 districts × avg £330k. "
-                "Under Storm scenario: max failure rises to 40–65%, Priority 1 areas activate."
-            ),
-            why_matters=(
-                "Investment planning for electricity networks requires risk-based prioritisation: "
-                "not just where the network is weak, but where weakness combines with social "
-                "exposure and financial impact. The recommendation score incorporates all three."
-            ),
-            pills=["Logistic z-model","Calm guard","Recommendation score","£18.5k/fault","BCR analysis"],
-            pill_color="#e67e22",
-            refs="z = −4.45 + 1.05×base + 0.95×grid + ... Intercept calibrated: UK avg → prob≈1.5%. "
-                 "Rec score: 0.30×risk+0.22×social+0.18×(100−res)+... "
-                 "Cost: £120k+rec×£8,500+outages×£35k+ENS×£260.",
+            subtitle="Applies a calibrated logistic failure probability model and translates risk into actionable investment priorities with indicative costs.",
+            what_did="Built an enhanced logistic z-score failure model combining base failure, grid failure, renewable intermittency, social vulnerability, outage clustering, ENS, hazard stress and risk. Applied calm-weather guard (×0.35, cap 18%). Generated recommendation scores and indicative costs per postcode.",
+            what_result="Max failure 6.2% in calm (Low — correct). Priority 1=0 under live (all rec scores <75). Programme cost £46m = 140 districts × avg £330k. Storm scenario: max failure 40–65%, Priority 1 areas activate.",
+            why_matters="Investment planning requires risk-based prioritisation combining network weakness, social exposure and financial impact. The recommendation score incorporates all three dimensions.",
+            pills=["Logistic z-model","Calm guard","6-criterion score","£18.5k/fault","BCR analysis"],
+            pill_color="#e67e22", refs="z=−4.45+1.05×base+0.95×grid+... Intercept calibrated: UK avg→prob≈1.5%. Cost: £120k+rec×£8,500+outages×£35k+ENS×£260.",
             svg_or_html=_SVG_FAILURE,
         ),
         "scenario": dict(
             tab_number=7, tab_name="Scenario Losses",
             tag="What-if stress testing", tag_color="#ffebee", tag_text_color="#c0392b",
-            subtitle=(
-                "Compares financial loss, risk, resilience and ENS across six what-if "
-                "stress scenarios against the live baseline, using calibrated scenario "
-                "multipliers and mandatory output floors."
-            ),
-            what_did=(
-                "Designed 7 scenarios with physics-based multipliers (wind, rain, AQI, solar, "
-                "outage, finance) calibrated against UK incident return periods. "
-                "Implemented STRESS_PROFILES with mandatory risk floors, resilience penalties "
-                "and minimum outage counts to ensure scenarios are always more severe than "
-                "live baseline. Re-ran the full data pipeline for each scenario."
-            ),
-            what_result=(
-                "Live baseline loss: £183m. Extreme wind: ×2.15 → ~£394m. "
-                "Flood: ×2.40 → ~£440m. Compound: ×3.80 → ~£697m. "
-                "Total blackout: ×4.20 → ~£771m. All scenarios produce materially higher "
-                "outputs than baseline — STRESS_PROFILES functioning correctly."
-            ),
-            why_matters=(
-                "Scenario analysis is required for regulatory submissions (Ofgem resilience "
-                "reporting), insurance modelling and capital adequacy planning. Showing the "
-                "spread from normal to worst-case quantifies the value of resilience investment."
-            ),
+            subtitle="Compares financial loss, risk, resilience and ENS across six stress scenarios against the live baseline using calibrated multipliers and mandatory output floors.",
+            what_did="Designed 7 scenarios with physics-based multipliers (wind, rain, AQI, solar, outage, finance) calibrated against UK incident return periods. Implemented STRESS_PROFILES with mandatory risk floors and resilience penalties to ensure scenarios always exceed baseline severity.",
+            what_result="Live baseline £183m. Extreme wind ×2.15 → ~£394m. Flood ×2.40 → ~£440m. Compound ×3.80 → ~£697m. Blackout ×4.20 → ~£771m. All STRESS_PROFILES functioning correctly.",
+            why_matters="Scenario analysis is required for Ofgem resilience reporting, insurance modelling and capital adequacy planning. The spread from normal to worst-case quantifies the value of resilience investment.",
             pills=["7 scenarios","STRESS_PROFILES","Multiplier calibration","Storm Arwen","Return periods"],
-            pill_color="#c0392b",
-            refs="Multipliers calibrated: Storm Arwen Nov 2021, July 2022 heatwave, 2013–14 winter storms. "
-                 "Floors: Extreme wind risk_floor=72, Blackout risk_floor=92. "
-                 "ENS load factor applied in stress mode.",
+            pill_color="#c0392b", refs="Multipliers calibrated: Storm Arwen 2021, July 2022 heatwave, 2013–14 winter storms. Floors: Extreme wind risk_floor=72, Blackout risk_floor=92.",
             svg_or_html=_SVG_SCENARIO,
         ),
         "finance": dict(
             tab_number=8, tab_name="Finance & Funding",
             tag="Economic impact model", tag_color="#faeeda", tag_text_color="#854F0B",
-            subtitle=(
-                "Quantifies the full economic cost of power disruptions across five "
-                "components using published UK regulatory evidence, and ranks postcodes "
-                "by funding priority using a seven-criteria weighted model."
-            ),
-            what_did=(
-                "Built a 5-component loss model using unit rates from BEIS, Ofgem RIIO-ED2, "
-                "CBI and RAEng studies. Estimated outage duration using a dynamic formula "
-                "based on fault count. Applied scenario multipliers to the total. "
-                "Ranked funding priority using a 7-criterion weighted score and classified "
-                "into four investment bands (Immediate/High/Medium/Monitor)."
-            ),
-            what_result=(
-                "Total modelled loss £140m (live calm). P95 loss across places. "
-                "No Immediate funding areas in calm — Priority 3 and Monitor dominate. "
-                "Waterfall chart shows VoLL is typically 60–70% of total loss. "
-                "Funding score formula: 0.26×risk+0.20×(100−res)+0.18×social+..."
-            ),
-            why_matters=(
-                "Regulators and investors require monetised risk to justify network spending. "
-                "The 5-component model separates costs by who bears them (customers, businesses, "
-                "DNO, NHS) enabling targeted policy responses and regulatory cost-benefit cases."
-            ),
-            pills=["VoLL £17k/MWh","£48/customer","£18.5k/fault","7-criterion ranking","BCR analysis"],
-            pill_color="#BA7517",
-            refs="VoLL: BEIS 2019. Customer interruption: RAEng 2014, DNO 2023. "
-                 "Restoration: NPg/UKPN RIIO-ED2. Critical services: NHS/CQC/BMA. "
-                 "Duration: 1.5+clip(faults/6,0,1)×5.5 hours.",
+            subtitle="Quantifies the full economic cost of power disruptions across five components using published UK regulatory evidence.",
+            what_did="Built a 5-component loss model using unit rates from BEIS, Ofgem RIIO-ED2, CBI and RAEng studies. Estimated outage duration dynamically from fault count. Applied scenario multipliers to total. Ranked funding priority using a 7-criterion weighted score with four investment bands.",
+            what_result="Total modelled loss £140m (live calm). VoLL typically 60–70% of total. No Immediate funding areas in calm conditions — consistent with normal network operation.",
+            why_matters="Regulators and investors require monetised risk to justify network spending. The 5-component model separates costs by who bears them (customers, businesses, DNO, NHS) enabling targeted policy responses.",
+            pills=["VoLL £17k/MWh","£48/customer","£18.5k/fault","7-criterion ranking","BCR notes"],
+            pill_color="#BA7517", refs="VoLL: BEIS 2019. Customer: RAEng 2014. Restoration: NPg RIIO-ED2. Critical: NHS/CQC/BMA. Duration: 1.5+clip(faults/6,0,1)×5.5 hours.",
             svg_or_html=_SVG_FINANCE,
         ),
         "investment": dict(
             tab_number=9, tab_name="Investment Engine",
             tag="Postcode resilience scoring", tag_color="#e3f2fd", tag_text_color="#185FA5",
-            subtitle=(
-                "Generates postcode-level resilience scores and investment recommendations "
-                "by combining outage evidence, place-level model outputs and a "
-                "multi-criteria recommendation engine."
-            ),
-            what_did=(
-                "Built a postcode resilience pipeline that groups NPG outage records by "
-                "postcode label and applies outage-pressure penalties to the nearest configured "
-                "place's resilience score. Generated recommendation scores using a 6-criterion "
-                "weighted formula and translated them into priority bands and indicative costs."
-            ),
-            what_result=(
-                "106 postcode areas analysed. All in Monitor/Priority 3 under calm conditions "
-                "(rec scores 20–38). Programme cost £49m = 106 × avg £463k. "
-                "Total exposed loss £1.8bn = accumulated financial risk across all districts. "
-                "Under storm scenarios: Priority 1 areas emerge in high-risk postcodes."
-            ),
-            why_matters=(
-                "DNOs and Ofgem need spatially granular investment evidence at postcode sector "
-                "level for regulatory asset management (CNAIM) submissions. The recommendation "
-                "engine provides a defensible, transparent ranking methodology."
-            ),
+            subtitle="Generates postcode-level resilience scores and investment recommendations by combining NPG outage evidence with place-level model outputs.",
+            what_did="Built a postcode resilience pipeline grouping NPG outage records by postcode and applying outage-pressure penalties to nearest-place resilience scores. Generated 6-criterion recommendation scores and translated them into priority bands and indicative costs.",
+            what_result="106 postcode areas analysed. All Monitor/Priority 3 under calm (rec 20–38). Programme cost £49m = 106 × avg £463k. Total exposed loss £1.8bn = accumulated economic risk across all districts.",
+            why_matters="DNOs and Ofgem need spatially granular investment evidence at postcode sector level for CNAIM regulatory asset management submissions.",
             pills=["106 postcodes","Outage pressure penalty","6-criterion score","BCR notes","CNAIM proxy"],
-            pill_color="#185FA5",
-            refs="Penalty: outage_pen=clip(count/6,0,1)×16, cust_pen=clip(cust/1500,0,1)×12. "
-                 "Rec: 0.30×risk+0.22×social+0.18×(100−res)+0.13×loss+0.10×ENS+0.07×out. "
-                 "Cost: £120k+rec×£8,500+out×£35k+ENS×£260.",
+            pill_color="#185FA5", refs="Penalty: clip(count/6,0,1)×16+clip(cust/1500,0,1)×12. Rec: 0.30r+0.22s+0.18(100−res)+0.13L+0.10E+0.07o. Cost: £120k+rec×£8,500+out×£35k+ENS×£260.",
             svg_or_html=_SVG_INVESTMENT,
         ),
         "mc": dict(
             tab_number=10, tab_name="Monte Carlo Risk Analysis",
             tag="Probabilistic uncertainty", tag_color="#f3e5f5", tag_text_color="#3C3489",
-            subtitle=(
-                "Runs a correlated Monte Carlo simulation to quantify tail risk beyond "
-                "point estimates, using a shared storm-shock variable to produce "
-                "realistic co-movement of wind, rain, outage and ENS."
-            ),
-            what_did=(
-                "Designed a correlated Monte Carlo model with a shared N(0,1) storm shock "
-                "driving wind (0.16σ), rain (0.28σ), outage Poisson rate and ENS. "
-                "Added triangular demand distribution (0.78–1.95) and lognormal "
-                "restoration costs. Computed P95, mean failure and CVaR95 using the correct "
-                "exceedance-mean formula: CVaR95 = mean(loss | loss ≥ P95_threshold)."
-            ),
-            what_result=(
-                "P95 risk 58.7/100 for Newcastle (worst case). "
-                "Mean failure 39.8% (MC model uses inflection at 58, not 72 — more sensitive). "
-                "CVaR95 £161.76m = expected loss in the worst 5% of scenarios. "
-                "Shared shock increases tail risk estimate by ~35% vs independent sampling."
-            ),
-            why_matters=(
-                "Point estimates (mean risk, mean loss) underestimate the cost of rare events "
-                "that drive network investment decisions. CVaR95 is the industry standard for "
-                "capital adequacy and insurance reserve planning in the energy sector."
-            ),
+            subtitle="Runs a correlated Monte Carlo simulation to quantify tail risk using a shared storm-shock variable for realistic co-movement.",
+            what_did="Designed a correlated MC model with shared N(0,1) storm shock driving wind (×exp(0.16σ)), rain (×exp(0.28σ)), outage Poisson rate and ENS. Added triangular demand (0.78–1.95) and lognormal restoration costs. Computed P95, mean failure and CVaR95 = mean(loss|loss≥P95_threshold).",
+            what_result="P95 risk 58.7/100 for Newcastle. Mean failure 39.8% (MC inflection at 58 not 72 — more sensitive). CVaR95 £161.76m. Shared shock increases tail estimate ~35% vs independent sampling.",
+            why_matters="CVaR95 is the industry standard for capital adequacy in the energy sector. Point estimates underestimate rare events that drive investment decisions.",
             pills=["Shared storm shock","1000 simulations","CVaR95","Lognormal tails","Triangular demand"],
-            pill_color="#7F77DD",
-            refs="Storm shock: wind×exp(0.16σ), rain×exp(0.28σ). "
-                 "CVaR95 = mean(loss[loss≥percentile(loss,95)]). "
-                 "Previous array-slicing formula was incorrect — exceedance-mean is the standard.",
+            pill_color="#7F77DD", refs="CVaR95=mean(loss[loss≥percentile(loss,95)]). Shock: wind×exp(0.16σ), rain×exp(0.28σ). Previous array-slicing formula was incorrect.",
             svg_or_html=_SVG_MC,
         ),
         "validation": dict(
             tab_number=11, tab_name="Validation / Black-Box Check",
             tag="Model governance", tag_color="#e8f5e9", tag_text_color="#1B5E20",
-            subtitle=(
-                "Runs 10 automated transparency checks to verify that the model meets "
-                "research-grade non-black-box standards and produces calibrated outputs."
-            ),
-            what_did=(
-                "Built an automated validation suite checking: model transparency, "
-                "risk monotonicity (corr with ENS), resilience inverse relationship, "
-                "financial quantification, social vulnerability integration, hazard coverage, "
-                "no circular feedback, grid failure realism (live &lt;10%), "
-                "CVaR95 formula correctness, and EV/V2G coverage."
-            ),
-            what_result=(
-                "All 10 checks pass under live conditions. "
-                "Grid failure realism check: mean probability 0.5–1.5% in calm weather — "
-                "consistent with Ofgem RIIO-ED2 Customer Interruptions statistics. "
-                "No circular compound-hazard feedback verified."
-            ),
-            why_matters=(
-                "Regulatory AI governance frameworks (DESNZ, Ofgem) increasingly require "
-                "explainability and non-black-box auditing for models used in investment "
-                "prioritisation. Passing 10/10 transparency checks supports deployment "
-                "in a regulatory context."
-            ),
-            pills=["10 checks","Grid failure realism","Monotonicity","Non-black-box","Ofgem calibration"],
-            pill_color="#27ae60",
-            refs="Grid failure benchmark: UK annual fault rate 0.5–1 CI per 100 customers (Ofgem RIIO-ED2). "
-                 "Resilience inverse: corr(risk, resilience) ≤ 0.4 expected. "
-                 "Compound hazard: inputs are wind/rain/AQI/outage only — no output feedback.",
+            subtitle="Runs 10 automated transparency checks to verify the model meets research-grade non-black-box standards.",
+            what_did="Built an automated validation suite: model transparency, risk monotonicity (corr≥−0.3), resilience inverse (corr≤0.4), financial quantification, social vulnerability integration, hazard coverage, no circular feedback, grid failure realism (<10% live), CVaR95 correctness, EV/V2G coverage.",
+            what_result="All 10 checks pass under live conditions. Grid failure mean 0.5–1.5% in calm — consistent with Ofgem RIIO-ED2 CI statistics. No circular compound-hazard feedback confirmed.",
+            why_matters="DESNZ and Ofgem AI governance frameworks increasingly require explainability and non-black-box auditing for models used in investment prioritisation.",
+            pills=["10 checks","Grid realism","Monotonicity","Non-black-box","Ofgem calibrated"],
+            pill_color="#27ae60", refs="Grid benchmark: 0.5–1 CI per 100 customers/year (Ofgem RIIO-ED2). Compound hazard inputs: wind/rain/AQI/outage only — no output feedback.",
             svg_or_html=_SVG_VALIDATION,
         ),
         "method": dict(
             tab_number=12, tab_name="Method / Transparency",
             tag="Full equation reference", tag_color="#f5f7fa", tag_text_color="#555",
-            subtitle=(
-                "Displays all core model equations with coefficients, calibration basis "
-                "and evidence sources. The single point of truth for academic citation."
-            ),
-            what_did=(
-                "Documented all 8 major model components with inline formula blocks: "
-                "risk score (5-layer weighted sum), grid failure (two-regime logistic), "
-                "resilience index (penalty-deducted), financial loss (5 components), "
-                "compound hazard proxy (non-circular), social vulnerability (IoD blended), "
-                "Monte Carlo (correlated shock), and funding priority (7-criterion)."
-            ),
-            what_result=(
-                "Each coefficient is traceable to a named published source. "
-                "No coefficients are 'tuned to fit' — all have an engineering or economic basis. "
-                "The method section alone constitutes the methods section of a research paper."
-            ),
-            why_matters=(
-                "Academic and regulatory credibility requires that every number can be "
-                "explained and defended. The method tab enables peer review, audit and "
-                "future calibration updates without reverse-engineering the codebase."
-            ),
-            pills=["8 model equations","All coefficients sourced","No black-box tuning","Peer-reviewable","Paper-ready"],
-            pill_color="#555",
-            refs="Sources: BEIS 2019, Ofgem RIIO-ED2, RAEng 2014, CBI 2011, NPg 2023, "
-                 "IoD2025 DLUHC, Open-Meteo, Panteli & Mancarella (2015), Billinton & Allan (1996).",
+            subtitle="Displays all core model equations with coefficients, calibration basis and evidence sources — the academic methods section.",
+            what_did="Documented all 8 major model components with inline formula blocks: risk (5-layer), grid failure (two-regime), resilience (penalty-deducted), financial loss (5 components), compound hazard (non-circular), social vulnerability (IoD-blended), Monte Carlo (correlated), and funding priority (7-criterion).",
+            what_result="Every coefficient traceable to a named published source. No coefficients 'tuned to fit'. The method section constitutes the methods section of a research paper.",
+            why_matters="Academic and regulatory credibility requires every number to be explained and defended. Enables peer review, audit and future calibration updates.",
+            pills=["8 equations","All coefficients sourced","No black-box tuning","Peer-reviewable","Paper-ready"],
+            pill_color="#555", refs="Sources: BEIS 2019, Ofgem RIIO-ED2, RAEng 2014, CBI 2011, NPg 2023, IoD2025, Panteli & Mancarella (2015), Billinton & Allan (1996).",
             svg_or_html=_SVG_METHOD,
         ),
         "readme": dict(
             tab_number=13, tab_name="README",
             tag="Technical documentation", tag_color="#f5f7fa", tag_text_color="#555",
-            subtitle=(
-                "2,000+ word self-contained technical documentation covering all tabs, "
-                "equations, data sources, limitations and deployment instructions."
-            ),
-            what_did=(
-                "Wrote comprehensive technical documentation embedded in the application "
-                "covering: what each tab does, derivation rationale for every equation, "
-                "6 critical fixes applied, data source table, scenario design, "
-                "limitations for operational use, assembly instructions, and 10 references."
-            ),
-            what_result=(
-                "A self-contained document that serves as the paper's methods section, "
-                "data section and supplementary material simultaneously. "
-                "No external documentation needed for assessment or regulatory review."
-            ),
-            why_matters=(
-                "For regulatory submissions, academic papers and audits, the documentation "
-                "must be inseparable from the model. Embedding it ensures version consistency "
-                "and makes the application fully portable."
-            ),
+            subtitle="2,000+ word self-contained technical documentation covering all tabs, equations, data sources, limitations and deployment instructions.",
+            what_did="Wrote comprehensive documentation covering: what each tab does, derivation rationale for every equation, 6 critical fixes applied, data source table, scenario design, limitations for operational use, assembly instructions and 10 references.",
+            what_result="A self-contained document serving as the paper's methods, data and supplementary material simultaneously. No external documentation needed for assessment or review.",
+            why_matters="For regulatory submissions and academic papers, documentation must be inseparable from the model. Embedding it ensures version consistency and full portability.",
             pills=["2000+ words","9 sections","10 references","Self-contained","Paper-ready"],
-            pill_color="#555",
-            refs="Sections: Overview, Tab descriptions, Key fixes, Equations, Data sources, "
-                 "Scenario design, Limitations, Assembly, References.",
+            pill_color="#555", refs="Sections: Overview, Tab descriptions, Key fixes, Equations, Data sources, Scenario design, Limitations, Assembly, References.",
             svg_or_html=_SVG_README,
         ),
         "export": dict(
             tab_number=14, tab_name="Data / Export",
             tag="Reproducibility & open data", tag_color="#e8f5e9", tag_text_color="#1B5E20",
-            subtitle=(
-                "Provides full access to all model outputs as downloadable CSV files, "
-                "enabling independent verification, further analysis and regulatory submission."
-            ),
-            what_did=(
-                "Exposed 5 output tables with CSV download: place-level model outputs, "
-                "postcode resilience scores, investment recommendations, live outage layer "
-                "and the 15×15 IDW interpolation grid. Each table includes all intermediate "
-                "variables, not just final scores, to support audit and calibration."
-            ),
-            what_result=(
-                "5 downloadable CSV files. Places CSV: all risk/resilience/ENS/loss/MC outputs. "
-                "Postcodes CSV: resilience scores, priorities and indicative costs. "
-                "Grid CSV: 225 interpolated cells with all risk variables. "
-                "Outage CSV: live NPG records with synthetic flag."
-            ),
-            why_matters=(
-                "Open data principles require that model outputs are exportable and independently "
-                "verifiable. For Ofgem regulatory submissions, the output tables are the "
-                "primary evidence artefact. CSV export enables integration with existing "
-                "DNO GIS and asset management systems."
-            ),
+            subtitle="Provides full access to all model outputs as downloadable CSV files for independent verification and regulatory submission.",
+            what_did="Exposed 5 output tables with CSV download: place-level outputs, postcode resilience, investment recommendations, live outage layer and the 15×15 IDW grid. Each table includes all intermediate variables to support audit and calibration.",
+            what_result="5 downloadable CSVs. Places CSV: all risk/resilience/ENS/loss/MC outputs. Postcodes: priorities and costs. Grid: 225 interpolated cells. Outage: live records with synthetic flag.",
+            why_matters="Open data principles require exportable, independently verifiable outputs. For Ofgem submissions, the output tables are the primary evidence artefact.",
             pills=["5 CSV files","All intermediates","Reproducible","Open data","Regulatory ready"],
-            pill_color="#27ae60",
-            refs="Columns: grid_failure_probability (raw 0–1), grid_failure_% (percentage), "
-                 "is_synthetic_outage (visual fallback flag), flood_depth_proxy (model estimate, not measurement). "
-                 "API snapshot at refresh time — not a historical record.",
+            pill_color="#27ae60", refs="Columns: grid_failure_probability (raw 0–1), grid_failure_% (percentage), is_synthetic_outage (visual fallback flag).",
             svg_or_html=_SVG_EXPORT,
         ),
     }
 
+
+
+
+def render_tab_brief(tab_key: str) -> None:
+    """
+    Render an academic presentation brief for a tab using components.html.
+
+    Uses a self-contained HTML component with a toggle button so it works
+    correctly regardless of Streamlit markdown rendering restrictions.
+    The brief is collapsed by default (one click to expand).
+    """
+    BRIEFS = _get_briefs()
     if tab_key not in BRIEFS:
         return
 
     b = BRIEFS[tab_key]
-    html_content = _brief_html(**b)
 
-    with st.expander(
-        f"📋 Academic brief — {b['tab_name']}",
-        expanded=False,
-    ):
-        st.markdown(html_content, unsafe_allow_html=True)
+    # Build pills HTML
+    pills_html = "".join(
+        f"<span class=\'pill\'>{p}</span>"
+        for p in b["pills"]
+    )
+
+    # Escape the SVG/HTML visual for JS string embedding
+    visual = b["svg_or_html"].replace("\\", "\\\\").replace("`", "\\`")
+
+    accent = b["tag_color"]
+    text_c = b["tag_text_color"]
+
+    html_code = f"""<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+*{{box-sizing:border-box;margin:0;padding:0;}}
+body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  background:transparent;font-size:13px;color:#1a252f;}}
+.toggle-btn{{
+  display:flex;align-items:center;gap:8px;cursor:pointer;
+  padding:8px 14px;border-radius:10px;
+  background:#fff;border:0.5px solid #e0e0e0;
+  font-size:12px;font-weight:500;color:#444;
+  width:100%;text-align:left;transition:background .15s;
+}}
+.toggle-btn:hover{{background:#f5f5f5;}}
+.toggle-btn .icon{{transition:transform .25s;font-size:14px;}}
+.toggle-btn.open .icon{{transform:rotate(90deg);}}
+.brief{{display:none;margin-top:10px;}}
+.brief.open{{display:block;}}
+.grid{{display:grid;grid-template-columns:1.1fr 0.9fr;gap:18px;align-items:start;}}
+.tag{{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.06em;
+  text-transform:uppercase;padding:3px 11px;border-radius:999px;
+  background:{accent};color:{text_c};margin-bottom:9px;}}
+.title{{font-size:19px;font-weight:600;color:#1a252f;line-height:1.3;margin-bottom:7px;}}
+.sub{{font-size:12px;color:#666;line-height:1.6;margin-bottom:13px;}}
+.sec-title{{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+  color:#aaa;margin-bottom:3px;margin-top:10px;}}
+.sec-body{{font-size:12px;color:#444;line-height:1.65;}}
+.divider{{height:1px;background:#f0f0f0;margin:8px 0;}}
+.pill{{display:inline-block;font-size:11px;padding:2px 9px;border-radius:6px;
+  margin:2px 3px 2px 0;font-weight:500;
+  background:{accent};color:{text_c};
+  border:1px solid {accent};opacity:0.85;}}
+.ref{{font-size:10px;color:#aaa;margin-top:10px;line-height:1.5;}}
+</style>
+</head><body>
+
+<button class="toggle-btn" id="btn" onclick="toggle()">
+  <span class="icon">▶</span>
+  📋 Academic brief — {b["tab_name"]}
+  <span style="margin-left:auto;font-size:10px;color:#aaa;">Tab {b["tab_number"]} · {b["tag"]}</span>
+</button>
+
+<div class="brief" id="brief">
+  <div class="grid">
+    <div>
+      <span class="tag">Tab {b["tab_number"]} — {b["tag"]}</span>
+      <div class="title">{b["tab_name"]}</div>
+      <div class="sub">{b["subtitle"]}</div>
+
+      <div class="sec-title">What we did</div>
+      <div class="sec-body">{b["what_did"]}</div>
+      <div class="divider"></div>
+
+      <div class="sec-title">Key result</div>
+      <div class="sec-body">{b["what_result"]}</div>
+      <div class="divider"></div>
+
+      <div class="sec-title">Why it matters</div>
+      <div class="sec-body">{b["why_matters"]}</div>
+
+      <div style="margin-top:11px;">{pills_html}</div>
+      <div class="ref">{b["refs"]}</div>
+    </div>
+    <div>{visual}</div>
+  </div>
+</div>
+
+<script>
+var open = false;
+function toggle(){{
+  open = !open;
+  document.getElementById("brief").classList.toggle("open", open);
+  document.getElementById("btn").classList.toggle("open", open);
+  // Notify parent to resize iframe
+  if(open){{
+    setTimeout(function(){{
+      var h = document.body.scrollHeight;
+      window.parent.postMessage({{type:"resize",height:h}}, "*");
+    }}, 50);
+  }}
+}}
+</script>
+</body></html>"""
+
+    components.html(html_code, height=48, scrolling=False)
+
 
 
 # =============================================================================
