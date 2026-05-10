@@ -4505,34 +4505,81 @@ def _build_authority_risk_lookup(
     }
 
 
-def render_colourful_regional_map(
-    region: str, places: pd.DataFrame
+# =============================================================================
+# SAT-Guard — Regional Grid Intelligence Map
+# REPLACEMENT for spatial_tab() and render_colourful_regional_map()
+#
+# Mimics the Shutterstock-style political map:
+#   - Pastel / solid distinct colour per district (NOT risk-coded colours)
+#   - Dark boundary lines between districts
+#   - District name in UPPERCASE at polygon centroid
+#   - Red dot city markers with city name labels
+#   - Light base map (carto-positron) so colours pop
+#   - Risk data shown on hover tooltip + legend strip
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# PALETTE — each authority gets a fixed distinct pastel colour
+# (matches the political-map style in the reference image)
+# ---------------------------------------------------------------------------
+
+NORTHEAST_PALETTE: Dict[str, str] = {
+    "Northumberland":           "#aed6f1",   # light blue
+    "Newcastle / Gateshead":    "#a9dfbf",   # light green
+    "Sunderland":               "#f9e79f",   # light yellow
+    "County Durham":            "#f5cba7",   # light orange
+    "Teesside":                 "#d7bde2",   # light purple
+}
+
+YORKSHIRE_PALETTE: Dict[str, str] = {
+    "North Yorkshire":          "#aed6f1",   # light blue
+    "Leeds / Bradford":         "#a9dfbf",   # light green
+    "Sheffield / Rotherham":    "#f9e79f",   # light yellow
+    "Hull / East Riding":       "#f5cba7",   # light orange / peach
+}
+
+REGION_PALETTES: Dict[str, Dict[str, str]] = {
+    "North East": NORTHEAST_PALETTE,
+    "Yorkshire":  YORKSHIRE_PALETTE,
+}
+
+
+def _risk_badge_colour(risk_val: float) -> str:
+    """Return a small coloured badge hex for the risk legend strip."""
+    s = safe_float(risk_val)
+    if s >= 75: return "#e74c3c"
+    if s >= 55: return "#e67e22"
+    if s >= 35: return "#f1c40f"
+    return "#27ae60"
+
+
+def render_political_intelligence_map(
+    region: str,
+    places: pd.DataFrame,
 ) -> None:
     """
-    Render a colourful local authority risk map using filled polygons.
+    Render a political-style regional grid intelligence map.
 
-    Each authority polygon is:
-        - Filled with a categorical colour derived from mean risk score:
-            Deep crimson (#c0004a) — Severe  (>=85)
-            Deep orange  (#e8600a) — High    (>=65)
-            Strong blue  (#1565c0) — Moderate(>=40)
-            Forest green (#2e7d32) — Low     (<40)
-        - Opacity scales 0.62–0.88 with risk (higher risk = more opaque)
-        - Bounded by 2.8px white lines
-        - Hovered to show authority-level stats
-
-    City markers (white dots + text labels) are overlaid as a separate layer.
-
-    This is a proper political-map style with no pentagons, hexagons or
-    micro-cell scattering. Authority boundaries are meaningful geographic units.
+    Visual design (matches the reference image style):
+    ─────────────────────────────────────────────────────
+    • BACKGROUND:   carto-positron (white/light grey roads/water)
+    • POLYGONS:     each district filled with a distinct pastel colour
+                    (not risk-coded — distinct colour per district so the
+                     map is immediately readable as a political/admin map)
+    • BOUNDARIES:   dark (#2c3e50) 2.5px lines between districts
+    • DISTRICT NAMES: UPPERCASE bold text at polygon centroid
+    • CITY MARKERS: dark red filled circles (⬤) + city name labels
+    • HOVER:        risk score, resilience, grid failure %, ENS, financial loss
+    • LEGEND:       inline risk legend strip below the map
     """
-    center   = REGIONS[region]["center"]
-    polygons = REGIONS[region].get("authority_polygons", {})
-    risk_lkp = _build_authority_risk_lookup(places, region)
+    center  = REGIONS[region]["center"]
+    polygons= REGIONS[region].get("authority_polygons", {})
+    palette = REGION_PALETTES.get(region, {})
+    risk_lkp= _build_authority_risk_lookup(places, region)
 
     fig = go.Figure()
 
-    # ── Layer 1: Authority polygon fills ─────────────────────────────────
+    # ── Layer 1: Filled district polygons ────────────────────────────────
     for auth_name, auth_cfg in polygons.items():
         coords = auth_cfg.get("coords", [])
         if not coords:
@@ -4541,168 +4588,174 @@ def render_colourful_regional_map(
         lons_p = [c[0] for c in coords]
         lats_p = [c[1] for c in coords]
 
-        # Get risk metrics for this authority
-        stats    = risk_lkp.get(auth_name, {})
-        risk_val = stats.get("mean_risk", float(places["final_risk_score"].mean()))
-        res_val  = stats.get("mean_resilience", float(places["resilience_index"].mean()))
-        ens_val  = stats.get("total_ens", 0)
-        loss_val = stats.get("total_loss", 0)
-        soc_val  = stats.get("mean_social", 0)
-        gf_val   = stats.get("mean_gf", 0)
+        fill_colour = palette.get(auth_name, "#d5d8dc")   # grey fallback
 
-        fill_hex = regional_risk_hex(risk_val)
-        opacity  = regional_risk_opacity(risk_val)
+        stats     = risk_lkp.get(auth_name, {})
+        risk_val  = stats.get("mean_risk",       float(places["final_risk_score"].mean()))
+        res_val   = stats.get("mean_resilience", float(places["resilience_index"].mean()))
+        ens_val   = stats.get("total_ens",       0.0)
+        loss_val  = stats.get("total_loss",      0.0)
+        soc_val   = stats.get("mean_social",     0.0)
+        gf_val    = stats.get("mean_gf",         0.0)
 
-        # Build hover tooltip
-        tooltip_lines = [
-            f"<b>{auth_name}</b>",
-            f"Risk: {round(risk_val, 1)}/100 — <b>{risk_label(risk_val)}</b>",
-            f"Resilience: {round(res_val, 1)}/100 — {resilience_label(res_val)}",
-            f"Grid failure probability: {round(gf_val*100, 2)}%",
-            f"ENS: {round(ens_val, 1)} MW",
-            f"Financial loss: {money_m(loss_val)}",
-            f"Social vulnerability: {round(soc_val, 1)}/100",
-        ]
-        tooltip = "<br>".join(tooltip_lines)
+        risk_badge = _risk_badge_colour(risk_val)
+
+        tooltip = (
+            f"<b style='font-size:14px;'>{auth_name}</b><br>"
+            f"<span style='color:{risk_badge};'>●</span> "
+            f"<b>Risk: {round(risk_val,1)}/100</b> — {risk_label(risk_val)}<br>"
+            f"Resilience: {round(res_val,1)}/100 — {resilience_label(res_val)}<br>"
+            f"Grid failure: {round(gf_val*100,2)}%<br>"
+            f"ENS: {round(ens_val,1)} MW<br>"
+            f"Financial loss: {money_m(loss_val)}<br>"
+            f"Social vulnerability: {round(soc_val,1)}/100"
+        )
 
         fig.add_trace(go.Scattermapbox(
             lon       = lons_p,
             lat       = lats_p,
             mode      = "lines",
             fill      = "toself",
-            fillcolor = fill_hex,
-            line      = dict(width=2.8, color="white"),
-            opacity   = opacity,
+            fillcolor = fill_colour,
+            line      = dict(width=2.5, color="#2c3e50"),   # dark boundary
+            opacity   = 0.88,
             text      = [tooltip] * len(lons_p),
             hoverinfo = "text",
-            name      = f"{auth_name} · {risk_label(risk_val)}",
+            name      = auth_name,
             showlegend= True,
         ))
 
-    # ── Layer 2: Authority name labels (text at centroid) ─────────────────
+    # ── Layer 2: District name labels (UPPERCASE, bold, at centroid) ──────
     for auth_name, auth_cfg in polygons.items():
         coords = auth_cfg.get("coords", [])
         if not coords:
             continue
-        cx = float(np.mean([c[0] for c in coords]))
-        cy = float(np.mean([c[1] for c in coords]))
+
+        cx  = float(np.mean([c[0] for c in coords]))
+        cy  = float(np.mean([c[1] for c in coords]))
+        # Use UPPERCASE district name, like in a political atlas
+        label_text = auth_name.upper()
+
+        # Risk value for text colour decision
         stats    = risk_lkp.get(auth_name, {})
-        risk_val = stats.get("mean_risk", 0)
+        risk_val = stats.get("mean_risk", 0.0)
+        text_col = "#1a252f"   # near-black on pastel background
 
         fig.add_trace(go.Scattermapbox(
             lon  = [cx],
             lat  = [cy],
             mode = "text",
-            text = [auth_name],
-            textfont = dict(
-                size  = 12,
-                color = "white",
-            ),
+            text = [label_text],
+            textfont = dict(size=11, color=text_col),
             hoverinfo  = "skip",
             showlegend = False,
         ))
 
-    # ── Layer 3: City markers ─────────────────────────────────────────────
+    # ── Layer 3: City dot markers (dark red, like atlas style) ────────────
     city_lats  = places["lat"].tolist()
     city_lons  = places["lon"].tolist()
     city_names = places["place"].tolist()
-    city_risks = places["final_risk_score"].tolist()
-    city_gfs   = places["grid_failure_probability"].tolist()
-    city_res   = places["resilience_index"].tolist()
+    city_risks = [safe_float(r) for r in places["final_risk_score"].tolist()]
+    city_gfs   = [safe_float(g) for g in places["grid_failure_probability"].tolist()]
+    city_res   = [safe_float(r) for r in places["resilience_index"].tolist()]
+    city_ens   = [safe_float(e) for e in places["energy_not_supplied_mw"].tolist()]
 
     city_hover = [
-        f"<b>{n}</b><br>"
-        f"Risk: {round(r,1)}/100<br>"
+        f"<b>● {n}</b><br>"
+        f"Risk: {round(r,1)}/100 — {risk_label(r)}<br>"
         f"Resilience: {round(res,1)}/100<br>"
-        f"Grid failure: {round(gf*100,2)}%"
-        for n, r, res, gf in zip(city_names, city_risks, city_res, city_gfs)
+        f"Grid failure: {round(gf*100,2)}%<br>"
+        f"ENS: {round(ens,1)} MW"
+        for n, r, res, gf, ens in zip(
+            city_names, city_risks, city_res, city_gfs, city_ens
+        )
     ]
 
     fig.add_trace(go.Scattermapbox(
-        lon       = city_lons,
-        lat       = city_lats,
-        mode      = "markers+text",
-        marker    = dict(size=13, color="white", opacity=0.95),
-        text      = city_names,
-        textposition = "top center",
-        textfont  = dict(size=12, color="white"),
-        hovertext = city_hover,
-        hoverinfo = "text",
-        name      = "Cities",
-        showlegend= False,
+        lon          = city_lons,
+        lat          = city_lats,
+        mode         = "markers+text",
+        marker       = dict(
+            size     = 10,
+            color    = "#c0392b",        # dark red dot (atlas style)
+            opacity  = 1.0,
+        ),
+        text         = city_names,
+        textposition = "top right",
+        textfont     = dict(size=11, color="#1a252f"),
+        hovertext    = city_hover,
+        hoverinfo    = "text",
+        name         = "Cities",
+        showlegend   = False,
     ))
 
     # ── Layout ────────────────────────────────────────────────────────────
     fig.update_layout(
         mapbox=dict(
-            style  = "carto-darkmatter",
+            style  = "carto-positron",       # light atlas-style basemap
             center = {"lat": center["lat"], "lon": center["lon"]},
-            zoom   = center["zoom"],
+            zoom   = center["zoom"] + 0.2,
         ),
-        height = 600,
-        margin = dict(l=10, r=10, t=45, b=10),
-        title  = f"Local authority risk mosaic — {region}",
+        height = 650,
+        margin = dict(l=0, r=0, t=50, b=0),
+        title  = dict(
+            text  = f"⚡  {region} — Grid Risk Intelligence Map",
+            font  = dict(size=18, color="#1a252f"),
+            x     = 0.5,
+            xanchor = "center",
+        ),
         legend = dict(
-            bgcolor = "rgba(2,6,23,0.75)",
-            font    = dict(color="white", size=11),
-            orientation = "v",
+            bgcolor      = "rgba(255,255,255,0.92)",
+            font         = dict(color="#1a252f", size=11),
+            orientation  = "v",
             x=0.01, y=0.99,
-            bordercolor="rgba(148,163,184,0.20)",
-            borderwidth=1,
+            bordercolor  = "#bdc3c7",
+            borderwidth  = 1,
+            title        = dict(text="District", font=dict(size=12, color="#1a252f")),
         ),
-        paper_bgcolor = "#020617",
-        font = dict(color="white"),
+        paper_bgcolor = "#f8f9fa",
+        font = dict(color="#1a252f"),
     )
+
     st.plotly_chart(fig, use_container_width=True)
 
-    # ── Colour interpretation note ────────────────────────────────────────
+    # ── Risk legend strip (colour-coded, below map) ───────────────────────
+    # District colours above are for identification, NOT risk coding.
+    # This strip explains the risk dot colours in tooltips.
     st.markdown(
         """
-        <div class="note">
-        <b>Authority risk map:</b> &nbsp;
-        <span style="color:#2e7d32;font-weight:800;">■ Forest green</span> = Low risk (0–39) &nbsp;|&nbsp;
-        <span style="color:#1565c0;font-weight:800;">■ Strong blue</span> = Moderate (40–64) &nbsp;|&nbsp;
-        <span style="color:#e8600a;font-weight:800;">■ Deep orange</span> = High (65–84) &nbsp;|&nbsp;
-        <span style="color:#c0004a;font-weight:800;">■ Deep crimson</span> = Severe (≥85).<br>
-        Each polygon is a local authority area filled by the mean risk of its member places.
-        White boundary lines separate authorities. Higher opacity = higher risk.
-        Hover over any region for authority-level statistics.
+        <div style="
+            background:white;
+            border:1px solid #bdc3c7;
+            border-radius:10px;
+            padding:12px 16px;
+            margin-top:4px;
+            color:#1a252f;
+            font-size:13px;
+        ">
+        <b>Risk scale (shown in hover tooltips):</b> &nbsp;&nbsp;
+        <span style="color:#27ae60;font-size:16px;">●</span>
+        <b>Low</b> (0–34) &nbsp;&nbsp;
+        <span style="color:#f1c40f;font-size:16px;">●</span>
+        <b>Moderate</b> (35–54) &nbsp;&nbsp;
+        <span style="color:#e67e22;font-size:16px;">●</span>
+        <b>High</b> (55–74) &nbsp;&nbsp;
+        <span style="color:#e74c3c;font-size:16px;">●</span>
+        <b>Severe</b> (75–100) &nbsp;&nbsp;
+        | &nbsp;&nbsp;
+        <span style="color:#c0392b;font-size:16px;">●</span>
+        <b>City location</b>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
 
-def render_spatial_density_map(places: pd.DataFrame, region: str) -> None:
-    """Render an operational stress density heatmap using Plotly density_mapbox."""
-    center = REGIONS[region]["center"]
-    df = places.copy()
-    for c in ["lat", "lon", "final_risk_score"]:
-        df[c] = pd.to_numeric(df.get(c), errors="coerce").fillna(0)
+# ---------------------------------------------------------------------------
+# REPLACEMENT spatial_tab  (renamed + redesigned)
+# ---------------------------------------------------------------------------
 
-    fig = px.density_mapbox(
-        df, lat="lat", lon="lon", z="final_risk_score",
-        radius=48,
-        center={"lat": center["lat"], "lon": center["lon"]},
-        zoom=center["zoom"] - 0.3,
-        mapbox_style="carto-darkmatter",
-        color_continuous_scale="Turbo",
-        title="Operational stress density (IDW from place outputs)",
-        height=520,
-    )
-    fig.update_layout(
-        paper_bgcolor="#020617",
-        font=dict(color="white"),
-        margin=dict(l=10, r=10, t=45, b=10),
-        coloraxis_colorbar=dict(
-            title="Risk", tickvals=[0,25,50,75,100],
-            ticktext=["0","25","50","75","100"],
-        ),
-    )
-    st.plotly_chart(fig, use_container_width=True)
-
-
-def spatial_tab(
+def regional_intelligence_tab(
     region: str,
     places: pd.DataFrame,
     outages: pd.DataFrame,
@@ -4711,17 +4764,20 @@ def spatial_tab(
     map_mode: str,
 ) -> None:
     """
-    Spatial Intelligence tab.
+    Regional Grid Intelligence tab.
+
+    Replaces the previous 'Spatial Intelligence' tab.
+    Shows a proper political-atlas style map with distinct pastel district
+    colours, dark boundaries, UPPERCASE district names and red city dots —
+    matching the style of the reference administrative map image.
 
     Sections:
-    1. KPI metrics specific to spatial analysis
-    2. Coloured local authority risk map (filled polygons — no pentagons)
-    3. Operational stress density heatmap
-    4. Socio-technical scatter + risk/resilience bar
-    5. Outage map layer (when outages available)
-    6. Interpretation note
+      1. KPI strip
+      2. Political-style intelligence map (main visual)
+      3. Risk vs resilience analytics
+      4. Live outage map (when available)
     """
-    st.subheader("🌍 Spatial intelligence — postcode and authority risk mapping")
+    st.subheader("🗺️ Regional Grid Intelligence Map")
 
     df = places.copy()
     for c in ["lat","lon","final_risk_score","resilience_index",
@@ -4729,113 +4785,102 @@ def spatial_tab(
               "grid_failure_probability","flood_depth_proxy"]:
         df[c] = pd.to_numeric(df.get(c), errors="coerce").fillna(0)
 
-    # ── Section 0: Spatial KPIs ───────────────────────────────────────────
+    # ── KPI strip ─────────────────────────────────────────────────────────
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Highest risk area",     df.loc[df["final_risk_score"].idxmax(), "place"] if not df.empty else "N/A")
-    c2.metric("Lowest resilience",     df.loc[df["resilience_index"].idxmin(), "place"] if not df.empty else "N/A")
-    c3.metric("Max flood proxy (m)",   f"{df['flood_depth_proxy'].max():.2f}")
-    c4.metric("Grid failure range",    f"{df['grid_failure_probability'].min()*100:.2f}%–{df['grid_failure_probability'].max()*100:.2f}%")
+    if not df.empty:
+        c1.metric("Highest risk area",
+                  df.loc[df["final_risk_score"].idxmax(),  "place"])
+        c2.metric("Lowest resilience area",
+                  df.loc[df["resilience_index"].idxmin(), "place"])
+    c3.metric("Grid failure range",
+              f"{df['grid_failure_probability'].min()*100:.2f}%"
+              f" – {df['grid_failure_probability'].max()*100:.2f}%")
+    c4.metric("Total ENS",
+              f"{df['energy_not_supplied_mw'].sum():.1f} MW")
 
-    # ── Section 1: Authority risk map ─────────────────────────────────────
-    st.markdown("### 🗺️ Local authority risk map")
-    st.markdown(
-        """
-        <div class="note">
-        Filled local authority polygons coloured by mean operational risk.
-        Hover any polygon for authority-level statistics.
-        City markers show individual place locations.
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    render_colourful_regional_map(region, df)
+    # ── Main map ──────────────────────────────────────────────────────────
+    render_political_intelligence_map(region, df)
 
     st.markdown("---")
 
-    # ── Section 2: Density heatmap ────────────────────────────────────────
-    st.markdown("### 🔬 Operational stress density")
-    render_spatial_density_map(df, region)
-
-    st.markdown("---")
-
-    # ── Section 3: Analytics ──────────────────────────────────────────────
-    st.markdown("### 📊 Spatial analytics")
+    # ── Analytics ─────────────────────────────────────────────────────────
+    st.markdown("### 📊 District-level analytics")
     a, b = st.columns(2)
+
     with a:
-        fig2 = px.scatter(
-            df, x="social_vulnerability", y="final_risk_score",
+        fig_sc = px.scatter(
+            df,
+            x="social_vulnerability",
+            y="final_risk_score",
             size="energy_not_supplied_mw",
             color="resilience_index",
             hover_name="place",
             color_continuous_scale="RdYlGn_r",
             template=plotly_template(),
-            title="Socio-technical vulnerability clustering",
-            height=460,
+            title="Social vulnerability vs operational risk",
+            height=440,
             labels={
                 "social_vulnerability": "Social vulnerability (0–100)",
-                "final_risk_score":     "Risk (0–100)",
+                "final_risk_score":     "Risk score (0–100)",
                 "resilience_index":     "Resilience",
             },
         )
-        st.plotly_chart(fig2, use_container_width=True)
+        st.plotly_chart(fig_sc, use_container_width=True)
 
     with b:
-        fig3 = px.bar(
-            df.sort_values("final_risk_score", ascending=False),
-            x="place", y="final_risk_score",
-            color="grid_failure_probability",
-            color_continuous_scale="Turbo",
+        # Grid failure bar — now shows realistic values
+        gf_df = df[["place","grid_failure_probability","final_risk_score"]].copy()
+        gf_df["grid_failure_%"] = (gf_df["grid_failure_probability"]*100).round(3)
+        fig_gf = px.bar(
+            gf_df.sort_values("grid_failure_%", ascending=False),
+            x="place",
+            y="grid_failure_%",
+            color="final_risk_score",
+            color_continuous_scale="RdYlGn_r",
+            title="Grid failure probability by district (%)",
             template=plotly_template(),
-            title="Place risk score (colour = grid failure %)",
-            height=460,
+            height=440,
+            text="grid_failure_%",
+            labels={"grid_failure_%":"Grid failure (%)","final_risk_score":"Risk"},
         )
-        fig3.update_layout(margin=dict(l=10, r=10, t=55, b=10))
-        st.plotly_chart(fig3, use_container_width=True)
+        fig_gf.update_traces(texttemplate="%{text:.2f}%", textposition="outside")
+        fig_gf.update_layout(margin=dict(l=10,r=10,t=55,b=10))
+        st.plotly_chart(fig_gf, use_container_width=True)
 
-    # ── Section 4: Outage map ─────────────────────────────────────────────
+    # ── Live outage map ───────────────────────────────────────────────────
     if outages is not None and not outages.empty:
-        st.markdown("---")
-        st.markdown("### 🔴 Live outage locations")
         real_out = outages[~outages["is_synthetic_outage"]].copy()
         if not real_out.empty:
-            fig4 = px.scatter_mapbox(
+            st.markdown("---")
+            st.markdown("### 🔴 Live outage overlay")
+            fig_out = px.scatter_mapbox(
                 real_out,
                 lat="latitude", lon="longitude",
                 size="affected_customers",
                 color="outage_status",
-                hover_data={"outage_reference": True, "affected_customers": True,
-                            "outage_category": True, "estimated_restore": True},
-                mapbox_style="carto-darkmatter",
+                hover_data={
+                    "outage_reference":  True,
+                    "affected_customers":True,
+                    "outage_category":   True,
+                    "estimated_restore": True,
+                },
+                mapbox_style="carto-positron",
                 zoom=REGIONS[region]["center"]["zoom"],
-                center={"lat": REGIONS[region]["center"]["lat"],
-                        "lon": REGIONS[region]["center"]["lon"]},
-                title="Live NPG outage locations (size = affected customers)",
-                height=480,
+                center={
+                    "lat": REGIONS[region]["center"]["lat"],
+                    "lon": REGIONS[region]["center"]["lon"],
+                },
+                title="Live NPG outages (bubble size = affected customers)",
+                height=460,
                 template=plotly_template(),
             )
-            fig4.update_layout(paper_bgcolor="#020617", font=dict(color="white"),
-                               margin=dict(l=10, r=10, t=45, b=10))
-            st.plotly_chart(fig4, use_container_width=True)
-        else:
-            st.info("No live outage records available. Synthetic fallback points not shown.")
+            fig_out.update_layout(
+                paper_bgcolor="#f8f9fa",
+                font=dict(color="#1a252f"),
+                margin=dict(l=0,r=0,t=45,b=0),
+            )
+            st.plotly_chart(fig_out, use_container_width=True)
 
-    # ── Interpretation ────────────────────────────────────────────────────
-    st.markdown("---")
-    st.markdown(
-        """
-        <div class="note">
-        <b>Spatial intelligence design:</b><br>
-        The authority polygon map shows risk at local government boundary level,
-        reflecting infrastructure age, population density, social vulnerability
-        and meteorological exposure. Polygons are filled with categorical risk colours —
-        no micro-cell scatter, no overlapping shapes.<br><br>
-        The density map shows how operational stress propagates across the region using
-        inverse-distance-weighted interpolation from place-level model outputs.
-        High-density clusters indicate areas where multiple risk drivers converge.
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
 
 # END OF PART 6
 # Continue with: PART 7 (BBC weather component, overview tab, resilience tab,
@@ -7664,7 +7709,7 @@ def main() -> None:
         "🌪️ Simulation",               # 1
         "🌊 Natural hazards",          # 2
         "🏘️ IoD2025 socio-economic",   # 3
-        "🌍 Spatial intelligence",     # 4
+        "🗺️ Grid Intelligence Map",    # 4
         "🛡️ Resilience",               # 5
         "⚡ Failure & investment",     # 6
         "📉 Scenario losses",          # 7
@@ -7690,7 +7735,7 @@ def main() -> None:
         render_iod2025_tab(places)
 
     with tabs[4]:
-        spatial_tab(region, places, outages, pc, grid, map_mode)
+        regional_intelligence_tab(region, places, outages, pc, grid, map_mode)
 
     with tabs[5]:
         resilience_tab(places)
