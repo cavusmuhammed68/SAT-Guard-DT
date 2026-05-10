@@ -10347,11 +10347,12 @@ def _get_briefs() -> dict:
 
 def render_tab_brief(tab_key: str) -> None:
     """
-    Render an academic presentation brief for a tab using components.html.
+    Render an academic presentation brief using components.html.
 
-    Uses a self-contained HTML component with a toggle button so it works
-    correctly regardless of Streamlit markdown rendering restrictions.
-    The brief is collapsed by default (one click to expand).
+    Strategy: always fully visible (no toggle) so iframe height is fixed.
+    Streamlit's iframe cannot resize dynamically after load, so we render
+    the brief always-expanded at a fixed height with internal scroll.
+    A thin coloured header bar acts as the visual label.
     """
     BRIEFS = _get_briefs()
     if tab_key not in BRIEFS:
@@ -10359,525 +10360,245 @@ def render_tab_brief(tab_key: str) -> None:
 
     b = BRIEFS[tab_key]
 
-    # Build pills HTML
-    pills_html = "".join(
-        f"<span class=\'pill\'>{p}</span>"
+    pills_html = " ".join(
+        f'<span class="pill">{p}</span>'
         for p in b["pills"]
     )
 
-    # Escape the SVG/HTML visual for JS string embedding
-    visual = b["svg_or_html"].replace("\\", "\\\\").replace("`", "\\`")
-
-    accent = b["tag_color"]
-    text_c = b["tag_text_color"]
+    accent  = b["tag_color"]
+    text_c  = b["tag_text_color"]
+    visual  = b["svg_or_html"]
 
     html_code = f"""<!doctype html>
-<html><head><meta charset="utf-8">
+<html>
+<head>
+<meta charset="utf-8">
 <style>
 *{{box-sizing:border-box;margin:0;padding:0;}}
-body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-  background:transparent;font-size:13px;color:#1a252f;}}
-.toggle-btn{{
-  display:flex;align-items:center;gap:8px;cursor:pointer;
-  padding:8px 14px;border-radius:10px;
-  background:#fff;border:0.5px solid #e0e0e0;
-  font-size:12px;font-weight:500;color:#444;
-  width:100%;text-align:left;transition:background .15s;
+body{{
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  background:#fff;
+  color:#1a252f;
+  font-size:13px;
+  border:1px solid #e5e7eb;
+  border-radius:12px;
+  overflow:hidden;
 }}
-.toggle-btn:hover{{background:#f5f5f5;}}
-.toggle-btn .icon{{transition:transform .25s;font-size:14px;}}
-.toggle-btn.open .icon{{transform:rotate(90deg);}}
-.brief{{display:none;margin-top:10px;}}
-.brief.open{{display:block;}}
-.grid{{display:grid;grid-template-columns:1.1fr 0.9fr;gap:18px;align-items:start;}}
-.tag{{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.06em;
-  text-transform:uppercase;padding:3px 11px;border-radius:999px;
-  background:{accent};color:{text_c};margin-bottom:9px;}}
-.title{{font-size:19px;font-weight:600;color:#1a252f;line-height:1.3;margin-bottom:7px;}}
-.sub{{font-size:12px;color:#666;line-height:1.6;margin-bottom:13px;}}
-.sec-title{{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
-  color:#aaa;margin-bottom:3px;margin-top:10px;}}
-.sec-body{{font-size:12px;color:#444;line-height:1.65;}}
+.header{{
+  background:{accent};
+  color:{text_c};
+  padding:9px 16px;
+  display:flex;
+  align-items:center;
+  gap:10px;
+  font-size:11px;
+  font-weight:700;
+  letter-spacing:.05em;
+  text-transform:uppercase;
+  border-radius:11px 11px 0 0;
+}}
+.header .tabnum{{opacity:.7;font-weight:500;}}
+.header .tabname{{font-size:13px;font-weight:700;text-transform:none;letter-spacing:0;}}
+.body{{
+  padding:16px;
+  display:grid;
+  grid-template-columns:1.1fr 0.9fr;
+  gap:18px;
+  align-items:start;
+}}
+.left{{}}
+.right svg{{width:100%;border-radius:8px;border:1px solid #f0f0f0;}}
+.sub{{font-size:12px;color:#666;line-height:1.6;margin-bottom:13px;border-left:3px solid {accent};padding-left:10px;}}
+.sec-title{{
+  font-size:10px;font-weight:700;letter-spacing:.08em;
+  text-transform:uppercase;color:#aaa;margin-bottom:3px;margin-top:12px;
+}}
+.sec-body{{font-size:12px;color:#333;line-height:1.65;}}
 .divider{{height:1px;background:#f0f0f0;margin:8px 0;}}
-.pill{{display:inline-block;font-size:11px;padding:2px 9px;border-radius:6px;
+.pills{{margin-top:12px;}}
+.pill{{
+  display:inline-block;font-size:11px;padding:2px 9px;border-radius:6px;
   margin:2px 3px 2px 0;font-weight:500;
-  background:{accent};color:{text_c};
-  border:1px solid {accent};opacity:0.85;}}
-.ref{{font-size:10px;color:#aaa;margin-top:10px;line-height:1.5;}}
+  background:{accent};color:{text_c};opacity:.9;
+  border:1px solid rgba(0,0,0,.08);
+}}
+.ref{{
+  font-size:10px;color:#aaa;margin-top:10px;
+  line-height:1.6;
+  background:#fafafa;
+  border:1px solid #eee;
+  border-radius:6px;
+  padding:7px 10px;
+}}
 </style>
-</head><body>
+</head>
+<body>
 
-<button class="toggle-btn" id="btn" onclick="toggle()">
-  <span class="icon">▶</span>
-  📋 Academic brief — {b["tab_name"]}
-  <span style="margin-left:auto;font-size:10px;color:#aaa;">Tab {b["tab_number"]} · {b["tag"]}</span>
-</button>
-
-<div class="brief" id="brief">
-  <div class="grid">
-    <div>
-      <span class="tag">Tab {b["tab_number"]} — {b["tag"]}</span>
-      <div class="title">{b["tab_name"]}</div>
-      <div class="sub">{b["subtitle"]}</div>
-
-      <div class="sec-title">What we did</div>
-      <div class="sec-body">{b["what_did"]}</div>
-      <div class="divider"></div>
-
-      <div class="sec-title">Key result</div>
-      <div class="sec-body">{b["what_result"]}</div>
-      <div class="divider"></div>
-
-      <div class="sec-title">Why it matters</div>
-      <div class="sec-body">{b["why_matters"]}</div>
-
-      <div style="margin-top:11px;">{pills_html}</div>
-      <div class="ref">{b["refs"]}</div>
-    </div>
-    <div>{visual}</div>
-  </div>
+<div class="header">
+  <span class="tabnum">Tab {b['tab_number']}</span>
+  <span style="opacity:.4">|</span>
+  <span>{b['tag']}</span>
+  <span style="margin-left:auto;opacity:.5;font-weight:400;text-transform:none;font-size:11px;">Academic brief</span>
 </div>
 
-<script>
-var open = false;
-function toggle(){{
-  open = !open;
-  document.getElementById("brief").classList.toggle("open", open);
-  document.getElementById("btn").classList.toggle("open", open);
-  // Notify parent to resize iframe
-  if(open){{
-    setTimeout(function(){{
-      var h = document.body.scrollHeight;
-      window.parent.postMessage({{type:"resize",height:h}}, "*");
-    }}, 50);
-  }}
-}}
-</script>
-</body></html>"""
-
-    components.html(html_code, height=48, scrolling=False)
-
-
-
-# =============================================================================
-# README CONTENT
-# =============================================================================
-
-README_MD = """
-## SAT-Guard Grid Digital Twin — Full Technical Documentation
-
----
-
-### 1. Overview
-
-SAT-Guard is a transparent research-grade digital twin dashboard for regional
-electricity-grid resilience assessment. It combines live weather data, public
-outage records, socio-economic deprivation indices, engineering models and
-Monte Carlo uncertainty into a single operational intelligence platform for
-North East England and Yorkshire.
-
-The application is intentionally **not a black box**. Every formula, weight,
-assumption and intermediate variable is exposed in the code, documented in
-this README and verifiable in the Data/Export tab.
-
----
-
-### 2. What each tab does
-
-**Executive Overview**
-The top-level situational awareness screen. Shows the regional intelligence
-table sorted by risk score, plus risk and resilience gauges, a new
-grid-failure probability gauge (now calibrated to UK network statistics:
-~0.3–1.5% in calm conditions, not the previous unrealistic 7%), an ENS bar
-chart and a social-vulnerability scatter plot. The scenario description
-explains what physical event the selected mode represents.
-
-**Simulation**
-A BBC/WXCharts-inspired animated canvas showing precipitation shields,
-isobar pressure contours, warm/cold frontal boundaries, wind vectors and
-lightning (in storm mode). The stats bar at the bottom shows live-averaged
-wind speed, rainfall, risk score and grid failure probability as the
-animation advances through forecast hours.
-
-**Natural Hazards**
-Evaluates resilience separately for each of the five hazard types: wind
-storm, flood/heavy rain, drought/low renewable, air-quality/heat stress and
-compound hazard. The heatmap shows postcode resilience across all five
-dimensions simultaneously. The worst-case bar shows which postcode/hazard
-combination has the lowest resilience and why.
-
-**IoD2025 Socio-Economic Evidence**
-Shows how the Index of Deprivation 2025 data is matched to each configured
-place. Displays the composite vulnerability score, the match type (exact LAD,
-partial, regional aggregate or fallback) and individual domain scores where
-available. Place IoD2025 Excel files in `data/iod2025/` to activate full
-domain scoring.
-
-**Spatial Intelligence**
-Shows the regional risk distribution using filled local authority polygons
-coloured by mean risk score (forest green = low, strong blue = moderate,
-deep orange = high, deep crimson = severe). Authority boundary lines are
-drawn in white. Unlike the previous version which used pentagon/hexagon
-micro-cells, this map uses proper administrative boundaries making it
-immediately readable for operational and regulatory audiences.
-Also includes an operational stress density heatmap and spatial analytics.
-
-**Resilience**
-The resilience analysis screen with ranking bar, social-vulnerability scatter
-and cascade radar chart showing how power failure propagates to water, telecom,
-transport and social sectors. Displays the resilience formula and calibration note.
-
-**Failure and Investment**
-Shows the enhanced logistic failure probability model across all places and
-hazard types. The grid failure probability bar chart makes the calibration fix
-visible: calm UK winter conditions now show 0.3–1.5% rather than 7%. Includes
-investment urgency ranking and actionable recommendations with benefit-cost ratios.
-
-**Scenario Losses**
-Compares all what-if stress scenarios on financial loss, ENS and risk-resilience
-space. The live baseline is shown separately at the top. Each scenario has
-mandatory output floors ensuring it always appears more severe than live conditions.
-
-**Finance and Funding**
-The financial loss waterfall shows the five cost components side by side.
-The sunburst shows the loss structure by place and component. The funding
-priority table applies the seven-criteria prioritisation formula.
-
-**Monte Carlo**
-The Correlated Monte Carlo model. Uses a shared storm shock so wind, rain,
-outage count and ENS co-move realistically. Shows mean, P95 and CVaR95 loss.
-CVaR95 uses the correct exceedance-mean formula.
-
-**Validation / Black-Box**
-Runs ten automated model checks including a new grid-failure realism check
-that verifies the calm-weather regime produces ≤10% probability in live mode.
-All formulae are explicitly listed and cross-referenced to data sources.
-
-**Method**
-Displays all core formulae with coefficients and calibration rationale:
-risk model, grid failure (fixed), resilience index, financial loss, compound
-hazard, social vulnerability, Monte Carlo and funding priority.
-
-**README** (this tab)
-Full technical documentation.
-
-**Data / Export**
-All output tables with CSV download buttons. Grid failure probability is
-shown as both raw fraction and percentage for readability.
-
----
-
-### 3. Key fixes in this edition
-
-#### 3.1 Grid failure probability (critical fix)
-
-**Problem:** The previous formula was:
-
-    prob = 0.025 + 0.22×risk_n + 0.20×outage_n + 0.14×ens_n
-
-With risk=20 (calm conditions), no outages, low ENS, this produced:
-
-    0.025 + 0.22×0.20 + 0 + 0 = 0.069 → 6.9%
-
-This is unrealistic. UK electricity distribution networks have an annual
-fault rate of approximately 0.5–1 interruption per 100 customers (Ofgem
-RIIO-ED2 Customer Interruptions data). That corresponds to a daily
-probability of roughly 0.5–1%, not 6.9%.
-
-**Fix:** A two-regime formula:
-
-    CALM LIVE (wind<20, rain<2, outages<2, scenario=Live):
-    prob = 0.004 + 0.035×risk_n + 0.025×outage_n + 0.015×ens_n
-    clamped to [0.003, 0.045]  →  0.3% – 4.5%
-
-    STRESSED / SCENARIO:
-    prob = 0.008 + 0.18×risk_n + 0.16×outage_n + 0.12×ens_n
-    clamped to [0.005, 0.75]  →  0.5% – 75%
-
-Cold winter with no incidents: ~0.5–1.0% (matches UK statistics).
-Storm Extreme Wind scenario: rises to 25–45% (matches Storm Arwen data).
-
-#### 3.2 Spatial Intelligence map (major visual fix)
-
-**Problem:** Previous version scattered pentagon/hexagon micro-cells around
-each place coordinate. Cells overlapped each other, did not correspond to
-real geographic units, and the political-map concept was lost.
-
-**Fix:** Each local authority polygon is now rendered as a filled
-`Scattermapbox` trace with `fill="toself"`. Polygons are coloured by the
-mean risk score of their member places. White 2.8px boundary lines separate
-authorities. City markers are overlaid as a separate layer. The result is
-a clean political-map style that is immediately readable.
-
-#### 3.3 Circular compound hazard dependency (removed)
-
-**Problem:** A previous iteration of `compound_hazard_proxy` read
-`final_risk_score` as an input. This created a circular feedback loop:
-risk → compound_hazard → risk → … producing unrealistically high values
-under stress scenarios.
-
-**Fix:** `compute_compound_hazard_proxy()` now reads only direct
-meteorological inputs: `wind_speed_10m`, `precipitation`, `european_aqi`,
-`nearby_outages_25km`. The function is documented with a warning explaining
-why model outputs must never be used as its inputs.
-
-#### 3.4 CVaR95 exceedance-mean formula
-
-**Problem:** Previous version computed CVaR95 using array slicing which
-gives incorrect results due to floating-point index truncation.
-
-**Fix:**
-    p95_threshold = percentile(loss, 95)
-    exceedance    = loss[loss >= p95_threshold]
-    cvar95        = mean(exceedance)
-
-This is the correct conditional value-at-risk formula.
-
-#### 3.5 Flood depth proxy storage
-
-**Problem:** `flood_depth_proxy()` was computed in `build_places()` but
-its result was never written to the row dictionary, so the column always
-appeared as 0 or NaN in the output DataFrame.
-
-**Fix:** The flood depth proxy is now explicitly stored with:
-    row["final_risk_score"] = round(final_risk, 2)   # needed as input
-    fdp = flood_depth_proxy(row, scenario_name)
-    row["flood_depth_proxy"] = fdp
-
-#### 3.6 Duplicate function definitions (removed)
-
-**Problem:** `clamp()`, `risk_label()` and `resilience_label()` were each
-defined twice in the previous file, with the second definition silently
-overriding the first. This could cause subtle bugs if the two definitions
-had different behaviour.
-
-**Fix:** Each function is defined exactly once in Part 2.
-
----
-
-### 4. Model equations with derivation rationale
-
-#### 4.1 Risk score layers
-
-The five-layer risk model aggregates physical stress signals into a single
-0–100 score. Layer weights reflect their relative operational importance:
-
-**Wind (24 pts max):** Wind is the leading driver of unplanned interruptions
-in the UK. The threshold 18 km/h marks the onset of feeder sway; 70 km/h
-is the structural rating for most overhead lines.
-
-**Rain (20 pts max):** Surface-water flooding causes substation access issues
-above 1.5 mm/h and flash flooding above 25 mm/h. The 1.5 mm threshold
-excludes negligible drizzle.
-
-**Temperature (8 pts max):** Scores activate outside the 8–28°C comfort zone
-because transformers derate above 35°C and cable insulation stiffens below
-−10°C. The comfort zone centre of 18°C reflects UK annual average.
-
-**AQI (10 pts max):** The EU "Moderate" threshold of AQI=55 marks the onset
-of crew welfare protocols. At AQI=150, external field work is restricted.
-
-**ENS (14 pts max):** 2500 MW represents a major regional grid stress event.
-The linear scaling from 0 to 14 points reflects that ENS is a direct measure
-of grid failure severity.
-
-**Net load (10 pts max):** The logistic term activates above 80 MW net load
-(comfortable headroom) and saturates at 300 MW (near-capacity stress). This
-captures demand-side pressure when renewable generation is low.
-
-#### 4.2 Grid failure probability — derivation
-
-The two-regime model separates calm operating conditions from stressed
-conditions. This is necessary because:
-
-The baseline interruption rate of a UK DNO feeder in calm weather is
-approximately 0.5–1 fault per 100 customer connections per year, equivalent
-to a daily probability of 0.0014–0.0027. Adding weather and outage stress
-takes this to 0.3–1.5% in calm conditions and 5–45% under major storms.
-
-The calm-weather ceiling of 4.5% prevents a noisy API reading (e.g. AQI
-briefly spiking) from pushing the model into false stress territory.
-
-The stressed regime uses higher coefficients for risk_n (0.18 vs 0.035)
-because under storm conditions the risk score already incorporates the
-severe weather signal and grid failure scales non-linearly with it.
-
-#### 4.3 Resilience index — weight derivation
-
-The 0.28 weight on risk reflects that the risk score itself is a composite
-of five physical layers and is the strongest single predictor of operational
-degradation. The raw correlation between risk and resilience across scenarios
-is typically −0.75 to −0.90, confirming its dominance.
-
-The 9× coefficient on grid_failure (0–1 scale) is equivalent to a 9-point
-deduction at 100% failure probability. This is calibrated so that a grid
-failure probability of 0.50 produces a 4.5-point deduction — significant but
-not overwhelming given the 77-point range below the 92 base.
-
-The 7× on system_stress reflects that cascade effects across water, telecom,
-transport and social sectors compound the direct grid impact by approximately
-70% on average, based on Panteli and Mancarella's interdependency framework.
-
-#### 4.4 Social vulnerability blending
-
-The 70/30 blend (IoD2025 domain composite / IMD+density fallback) reflects
-that IoD2025 is the primary source when available, but IMD score and
-population density add independent information. Population density captures
-exposure volume (more customers affected per unit area) while IoD2025
-captures the depth of vulnerability (ability to cope without power).
-
-The 40/60 split within the fallback (density / deprivation) reflects that
-deprivation is a stronger predictor of inability to self-recover than density
-alone. A sparse area with high deprivation can be equally or more vulnerable
-than a dense area with moderate deprivation.
-
-#### 4.5 Financial loss unit rates
-
-VoLL (£17,000/MWh): The BEIS 2019 mixed domestic/commercial Value of Lost
-Load estimate. Industrial VoLL is typically £5,000–12,000/MWh; domestic
-VoLL is £25,000–45,000/MWh. The mixed rate reflects a typical regional
-distribution network customer mix.
-
-Customer interruption (£38): The Ofgem Interruptions Incentive Scheme
-penalty proxy. This represents the direct inconvenience, spoiled food and
-lost productivity cost per customer, not including medical or business costs.
-
-Restoration (£18,500/outage): The average DNO cost per fault from Ofgem
-RIIO-ED2 business plan submissions. Includes crew mobilisation, diagnosis,
-temporary switching, permanent repair and safety management.
-
-Critical services (£320/MWh × social_frac): The social cost of power cuts to
-NHS facilities, care homes and assisted living. The fraction of vulnerable
-customers (social_vulnerability/100) scales this appropriately.
-
-#### 4.6 Monte Carlo storm-shock correlation
-
-The shared storm shock is motivated by physical reality: during a severe
-storm, wind, rain, outage count and ENS are all elevated simultaneously.
-Treating them as independent would produce a distribution where sometimes
-wind is high but rain is normal, which is physically implausible for the
-dominant failure mode (wind-driven rain causing simultaneous multi-feeder faults).
-
-The storm shock coefficient on wind (0.16) is lower than on rain (0.28)
-because wind has a more deterministic response (structural failure above a
-threshold) while rain has higher spatial variability.
-
-The Poisson outage term with mean `0.8 + max(shock,0)` captures the
-non-linear clustering of faults during storms: when the shock is positive
-(storm direction), outage count increases super-linearly.
-
----
-
-### 5. Data sources
-
-| Source | Variables used | Update frequency |
-|---|---|---|
-| Open-Meteo Weather API | wind, rain, temp, humidity, cloud, radiation | 15 minutes |
-| Open-Meteo Air Quality API | european_aqi, PM2.5, NO2, ozone | 15 minutes |
-| Northern Powergrid Open Data | live outage locations, affected customers | 5 minutes |
-| IoD2025 (DLUHC) | income, employment, health, education, crime, housing, living environment, IDACI, IDAOPI | Annual (static file) |
-| Configured place metadata | population_density, estimated_load_mw, business_density | Static (REGIONS dict) |
-
-#### 5.1 Fallback behaviour
-
-If Open-Meteo is unavailable, weather variables are generated using
-`random.uniform()` within realistic UK ranges (wind 5–22 km/h, rain 0–2 mm/h,
-temperature 2–18°C). These fallbacks are clearly labelled in the time column.
-
-If the Northern Powergrid API returns no data, synthetic outage points are
-created for visual map continuity. They are marked `is_synthetic_outage=True`
-and excluded from all risk scoring in Live mode.
-
-If IoD2025 files are not present, social vulnerability falls back to:
-`0.40 × clip(pop_density/4500,0,1)×100 + 0.60 × vulnerability_proxy`.
-
----
-
-### 6. Scenario design
-
-Each scenario applies a set of multipliers to the live weather and outage
-inputs, then enforces mandatory minimum output floors (STRESS_PROFILES) to
-ensure stress scenarios are always more severe than the live baseline.
-
-| Scenario | Wind mult | Rain mult | AQI mult | Finance mult | Description |
-|---|---|---|---|---|---|
-| Live / Real-time | 1.00 | 1.00 | 1.00 | 1.00 | Measured conditions |
-| Extreme wind | 3.60 | 1.45 | 1.12 | 2.15 | 60–90 km/h gusts |
-| Flood | 1.55 | 7.50 | 1.18 | 2.40 | >30 mm/h rainfall |
-| Heatwave | 0.75 | 0.10 | 2.15 | 2.00 | 35–40°C peak |
-| Drought | 0.22 | 0.05 | 1.65 | 2.10 | Dunkelflaute |
-| Total blackout | 1.35 | 1.50 | 1.35 | 4.20 | Cascading outages |
-| Compound extreme | 3.25 | 6.50 | 2.20 | 3.80 | Multi-hazard |
-
----
-
-### 7. Limitations and calibration requirements
-
-This is a research-grade prototype. The following should be addressed before
-operational or regulatory use:
-
-1. Grid failure probability: calibrate against historical interruption records
-   from Ofgem/DCC Customer Minutes Lost data by region and season.
-2. Financial loss rates: replace with Ofgem-approved VoLL estimates specific
-   to the network area and customer mix.
-3. Social vulnerability: replace vulnerability_proxy values with IoD2025 LAD
-   data from DLUHC and run the full domain matching.
-4. Postcode boundaries: replace the configured place-level data with actual
-   postcode-sector level outputs from the relevant DNO GIS systems.
-5. Infrastructure data: populate `data/infrastructure/` with the actual
-   substation, line and GSP GeoJSON files for the region.
-6. Flood data: populate `data/flood/` with EA flood zone data clipped to the
-   region bounding box.
-7. Monte Carlo calibration: run backtesting against historical storm events
-   (e.g. Storm Arwen Nov 2021, Storm Isha Jan 2024) to calibrate storm shock
-   coefficients.
-
----
-
-### 8. Assembly and deployment
-
-    ASSEMBLY (Linux/Mac):
-    cat KASVA_P1.py KASVA_P2.py KASVA_P3.py KASVA_P4.py KASVA_P5.py \\
-        KASVA_P6.py KASVA_P7.py KASVA_P8.py KASVA_P9.py KASVA_P10.py \\
-        > app_final.py
-    streamlit run app_final.py
-
-    ASSEMBLY (Windows CMD):
-    copy /b KASVA_P1.py+KASVA_P2.py+KASVA_P3.py+KASVA_P4.py+KASVA_P5.py+\\
-            KASVA_P6.py+KASVA_P7.py+KASVA_P8.py+KASVA_P9.py+KASVA_P10.py \\
-            app_final.py
-
-    REQUIREMENTS:
-    pip install streamlit pandas numpy requests openpyxl pydeck plotly
-
----
-
-### 9. References
-
-1. Ofgem RIIO-ED2 Final Determinations, Annex 14 Resilience. 2022.
-2. BEIS, Value of Lost Load: Electricity. 2019.
-3. Ministry of Housing, Communities and Local Government. English Indices
-   of Deprivation 2025 Technical Report. 2025.
-4. Open-Meteo API Documentation. https://open-meteo.com/en/docs
-5. Northern Powergrid Open Data. https://northernpowergrid.opendatasoft.com
-6. Billinton R, Allan RN. Reliability Evaluation of Power Systems. 2nd ed.
-   Plenum Press, 1996.
-7. Panteli M, Mancarella P. Influence of Extreme Weather and Climate Change
-   on the Resilience of Power Systems. IEEE Transactions on Power Systems.
-   2015;30(2):987–997.
-8. Lund H, Kempton W. Integration of Renewable Energy into the Transport
-   and Electricity Sectors through V2G. Energy Policy. 2008;36(9):3578–3587.
-9. IEC 62351. Power Systems Management and Associated Information Exchange —
-   Data and Communications Security. 2020.
-10. Elexon. Load Duration Zones methodology documentation. 2023.
-"""
-
+<div class="body">
+  <div class="left">
+    <div class="sub">{b['subtitle']}</div>
+
+    <div class="sec-title">What we did</div>
+    <div class="sec-body">{b['what_did']}</div>
+    <div class="divider"></div>
+
+    <div class="sec-title">Key result</div>
+    <div class="sec-body">{b['what_result']}</div>
+    <div class="divider"></div>
+
+    <div class="sec-title">Why it matters</div>
+    <div class="sec-body">{b['why_matters']}</div>
+
+    <div class="pills">{pills_html}</div>
+    <div class="ref">{b['refs']}</div>
+  </div>
+
+  <div class="right">{visual}</div>
+</div>
+
+</body>
+</html>"""
+
+    with st.expander(
+        f"📋 Academic brief — {b['tab_name']}",
+        expanded=False,
+    ):
+        components.html(html_code, height=540, scrolling=True)
 
 def render_readme_tab() -> None:
     """Render the full README documentation tab."""
     render_tab_brief('readme')
     st.subheader("README — full technical documentation")
-    st.markdown(README_MD)
+    st.markdown("""
+## SAT-Guard Grid Digital Twin — Technical Documentation
+
+---
+
+### 1. Overview
+
+SAT-Guard is a transparent research-grade digital twin for regional electricity-grid
+resilience assessment combining live weather data, public outage records, socio-economic
+deprivation indices, engineering models and Monte Carlo uncertainty into a single platform.
+
+Every formula, weight and assumption is exposed in the code and documented here.
+There are no neural networks, no hidden weights and no proprietary transforms.
+
+---
+
+### 2. What each tab does
+
+**Executive Overview** — Single-screen risk/resilience summary. Risk gauge, resilience gauge,
+grid failure gauge (calibrated: 0.3–1.5% in calm UK winter, not 7%). ENS bar, social scatter.
+
+**Simulation** — BBC/WXCharts-inspired 6-layer canvas animation: backdrop, pressure contours,
+precipitation shields, frontal boundaries, wind vectors, city labels. 12-frame forecast.
+
+**Natural Hazards** — 5-dimension hazard resilience matrix (wind storm, flood, drought,
+heat/AQI, compound) for all postcode districts. Penalty-based scoring, heatmap and evidence table.
+
+**IoD2025 Socio-Economic** — Automatic IoD2025 Excel scanner, 4-level LAD matching hierarchy,
+0.70/0.30 IoD2025/fallback blend. 9 deprivation domains per LAD.
+
+**Grid Intelligence Map** — Real UK postcode boundary GeoJSON from missinglink/uk-postcode-polygons.
+IDW-interpolated risk per district. Continuous pastel gradient, 39 unique tones for NE region.
+
+**Resilience** — Resilience index decomposition. Base 92 minus 6 weighted penalties.
+Infrastructure cascade model (power→water→telecom→transport→social). Radar chart.
+
+**Failure & Investment** — Enhanced logistic z-score failure model. Calm-weather guard
+(×0.35, cap 18%). Recommendation score. Priority bands. Indicative investment costs with BCR.
+
+**Scenario Losses** — 7 what-if scenarios with physics-based multipliers and mandatory
+STRESS_PROFILES floors. Live baseline shown separately.
+
+**Finance & Funding** — 5-component loss model (VoLL, customer, business, restoration,
+critical services). 7-criterion funding priority ranking. Interactive calculator.
+
+**Investment Engine** — Postcode resilience pipeline: outage grouping, pressure penalties,
+recommendation scores, priority bands, indicative costs.
+
+**Monte Carlo** — Correlated storm-shock MC (shared N(0,1) shock for wind/rain/outage/ENS).
+Triangular demand, lognormal restoration. P95, mean failure, CVaR95 (exceedance-mean).
+
+**Validation** — 10 automated transparency checks including grid failure realism and CVaR95 formula.
+
+**Method** — All 8 model equations with coefficients, calibration basis and evidence sources.
+
+**README** — This documentation.
+
+**Data / Export** — 5 CSV downloads: places, postcodes, recommendations, outages, grid cells.
+
+---
+
+### 3. Key equations
+
+**Risk score (5 layers, 0–100):**
+`weather(max 57) + pollution(15) + net_load(10) + outage(16) + ENS(14)`
+Calm guard: capped at 36 when wind<24, rain<2, outages≤3 in Live mode.
+
+**Grid failure probability — two-regime:**
+Calm live: `0.004 + 0.035×risk_n + 0.025×outage_n + 0.015×ens_n` → max 4.5%
+Stressed: `0.008 + 0.18×risk_n + 0.16×outage_n + 0.12×ens_n` → max 75%
+Calibration: UK annual fault rate ~0.5–1 CI per 100 customers (Ofgem RIIO-ED2).
+
+**Resilience (15–100):**
+`92 − 0.28×risk − 0.11×social − 9×grid_fail − 5×renew_fail − 7×system_stress − finance_pen`
+finance_pen = clip(loss/£25m, 0, 1) × 6
+
+**Financial loss:**
+`(VoLL + customer + business + restoration + critical) × scenario_multiplier`
+VoLL=£17k/MWh (BEIS 2019) · Customer=£48 (RAEng 2014) · Restoration=£18.5k/fault (NPg RIIO-ED2)
+
+**Social vulnerability:**
+Matched: `0.70×IoD2025_composite + 0.30×(0.40×density_n + 0.60×IMD)`
+Fallback: `0.40×density_n×100 + 0.60×IMD_score`
+
+**CVaR95:** `mean(loss | loss ≥ percentile(loss, 95))` — correct exceedance-mean formula.
+
+---
+
+### 4. Data sources
+
+| Source | Variables | Update |
+|---|---|---|
+| Open-Meteo Weather | wind, rain, temp, humidity, cloud, radiation | 15 min |
+| Open-Meteo Air Quality | european_aqi, PM2.5, NO2, ozone | 15 min |
+| Northern Powergrid Open Data | live outage locations, affected customers | 5 min |
+| IoD2025 (DLUHC) | 9 deprivation domains per LAD | Annual |
+| Configured place metadata | population_density, load, business_density | Static |
+
+---
+
+### 5. Assembly
+
+```
+cat KASVA_P1.py ... KASVA_P10.py > app_final.py
+streamlit run app_final.py
+pip install streamlit pandas numpy requests openpyxl pydeck plotly
+```
+
+---
+
+### 6. References
+
+1. BEIS 2019 — Value of Lost Load study (£17,000/MWh mixed D+C)
+2. Ofgem RIIO-ED2 Final Determinations 2022 — resilience and interruption frameworks
+3. RAEng 2014 — National blackout study, customer interruption costs
+4. IoD2025 DLUHC — English Indices of Deprivation 2025
+5. Northern Powergrid 2023 — RIIO-ED2 business plan, restoration costs
+6. Panteli & Mancarella (2015) — Power system resilience framework
+7. Billinton & Allan (1996) — Reliability Evaluation of Power Systems
+8. CBI 2011 — Energy survey, business disruption costs
+9. Open-Meteo API documentation — https://open-meteo.com/en/docs
+10. Elexon — Load Duration Zones methodology
+    """)
 
 
 # =============================================================================
