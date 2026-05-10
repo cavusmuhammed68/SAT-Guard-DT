@@ -1,5 +1,5 @@
 """
-SAT-Guard Advanced Streamlit Dashboard 
+SAT-Guard Advanced Streamlit Dashboard — Final Edition
 ==========================================================
 PART 1 of 10 — Page config, global CSS, all configuration constants
 
@@ -770,7 +770,7 @@ FINANCIAL_RATES = {
 # END OF PART 1
 # Continue with: PART 2 (helpers, colour functions, file loaders, IoD loader)
 # =============================================================================
-# SAT-Guard Digital Twin — Q1 Final Edition
+# SAT-Guard Digital Twin — Final Edition
 # PART 2 of 10 — Helpers, colour functions, file loaders, IoD/IMD loader
 # =============================================================================
 
@@ -1800,7 +1800,7 @@ def standardise_outages(raw_df: pd.DataFrame, region: str) -> pd.DataFrame:
 # END OF PART 2
 # Continue with: PART 3 (core physical models, ENS, financial loss)
 # =============================================================================
-# SAT-Guard Digital Twin — Q1 Final Edition
+# SAT-Guard Digital Twin — Final Edition
 # PART 3 of 10 — Core physical models: scenario, calm weather, renewable,
 #                ENS, financial loss, social vulnerability,
 #                FIXED grid failure probability
@@ -2529,7 +2529,7 @@ def flood_depth_proxy(row: Dict[str, Any], scenario_name: str) -> float:
 # END OF PART 3
 # Continue with: PART 4 (natural hazard models, EV/V2G, Monte Carlo)
 # =============================================================================
-# SAT-Guard Digital Twin — Q1 Final Edition
+# SAT-Guard Digital Twin — Final Edition
 # PART 4 of 10 — Natural hazard models, EV/V2G, Monte Carlo Q1,
 #                funding priority, validation, scenario financial matrix
 # =============================================================================
@@ -3033,9 +3033,9 @@ def build_ev_v2g_analysis(places: pd.DataFrame, scenario: str) -> pd.DataFrame:
 # Q1 MONTE CARLO  (correlated storm-shock)
 # =============================================================================
 
-def monte_carlo_q1(row: Dict[str, Any], simulations: int = 1000) -> Dict[str, Any]:
+def monte_carlo_correlated(row: Dict[str, Any], simulations: int = 1000) -> Dict[str, Any]:
     """
-    Correlated Monte Carlo simulation for a single place.
+    Q1-grade correlated Monte Carlo simulation for a single place.
 
     Key improvements over independent-variable MC:
 
@@ -3068,14 +3068,14 @@ def monte_carlo_q1(row: Dict[str, Any], simulations: int = 1000) -> Dict[str, An
         due to floating-point index truncation.
 
     Outputs:
-        mc_risk_mean:       mean risk score across simulations
+        q1_mc_risk_mean:       mean risk score across simulations
         mc_risk_p95:        95th percentile risk score
-        mc_failure_mean:    mean failure probability
-        mc_failure_p95:     95th percentile failure probability
-        mc_loss_mean_gbp:   mean financial loss
-        mc_loss_p95_gbp:    95th percentile financial loss
-        mc_loss_cvar95_gbp: CVaR95 (expected loss given exceeding P95)
-        mc_histogram:       first 500 risk samples for histogram plotting
+        q1_mc_failure_mean:    mean failure probability
+        q1_mc_failure_p95:     95th percentile failure probability
+        q1_mc_loss_mean_gbp:   mean financial loss
+        q1_mc_loss_p95_gbp:    95th percentile financial loss
+        q1_mc_loss_cvar95_gbp: CVaR95 (expected loss given exceeding P95)
+        q1_mc_histogram:       first 500 risk samples for histogram plotting
     """
     simulations = int(clamp(simulations, 100, 5000))
     rng = np.random.default_rng()
@@ -3132,11 +3132,11 @@ def monte_carlo_q1(row: Dict[str, Any], simulations: int = 1000) -> Dict[str, An
     }
 
 
-def build_q1_mc_table(places: pd.DataFrame, simulations: int) -> pd.DataFrame:
-    """Run Monte Carlo for every place, return sorted summary DataFrame."""
+def build_mc_table(places: pd.DataFrame, simulations: int) -> pd.DataFrame:
+    """Run Q1 Monte Carlo for every place, return sorted summary DataFrame."""
     rows: List[Dict[str, Any]] = []
     for _, r in places.iterrows():
-        out = monte_carlo_q1(r.to_dict(), simulations)
+        out = monte_carlo_correlated(r.to_dict(), simulations)
         out["place"]    = r.get("place")
         out["postcode"] = r.get("postcode_prefix")
         rows.append(out)
@@ -3161,7 +3161,7 @@ def advanced_monte_carlo(
     Per-place Monte Carlo with independent perturbations.
 
     Used inside build_places() to populate mc_p05/p50/p95 columns.
-    For correlated analysis, use monte_carlo() in the Monte Carlo tab.
+    For correlated analysis, use monte_carlo_correlated() in the Monte Carlo tab.
 
     Perturbations:
         wind:   × LogNormal(0, 0.16)
@@ -3379,7 +3379,7 @@ def validate_model_transparency(
         6. Natural hazard coverage: all 5 hazard types present
         7. No circular hazard: compound_hazard_proxy is present
         8. Grid failure realism: mean grid failure < 10% in live mode
-        9. CVaR95 correctness: always pass (formula is in monte_carlo)
+        9. CVaR95 correctness: always pass (formula is in monte_carlo_correlated)
        10. EV/V2G coverage: v2g_support_mw column exists
     """
     checks: List[Dict[str, str]] = []
@@ -3413,7 +3413,7 @@ def validate_model_transparency(
             "evidence": f"Mean grid_failure_probability = {round(mean_gf*100,2)}%. Target: < 10% in live mode."})
 
     checks.append({"check": "CVaR95 formula correctness", "result": "Pass",
-        "evidence": "CVaR95 = mean(loss | loss >= P95_threshold). Exceedance-mean formula used in monte_carlo()."})
+        "evidence": "CVaR95 = mean(loss | loss >= P95_threshold). Exceedance-mean formula used in monte_carlo_correlated()."})
 
     checks.append({"check": "EV/V2G coverage present", "result": "Pass" if "v2g_support_mw" in places.columns else "Warning",
         "evidence": "v2g_support_mw, grid_storage_mw, total_storage_support computed per place."})
@@ -3423,7 +3423,7 @@ def validate_model_transparency(
 # END OF PART 4
 # Continue with: PART 5 (build_places, build_grid, postcode resilience, investment)
 # =============================================================================
-# SAT-Guard Digital Twin — Q1 Final Edition
+# SAT-Guard Digital Twin — Final Edition
 # PART 5 of 10 — build_places() main pipeline, build_grid(),
 #                postcode resilience, investment recommendations
 # =============================================================================
@@ -4061,7 +4061,7 @@ def build_investment_recommendations(
 # END OF PART 5
 # Continue with: PART 6 (chart builders, colour legend, hero, spatial intelligence map)
 # =============================================================================
-# SAT-Guard Digital Twin — Q1 Final Edition
+# SAT-Guard Digital Twin — Final Edition
 # PART 6 of 10 — Plotly chart builders, colour legend, hero/metrics panels,
 #                spatial intelligence (coloured authority map, NO pentagons)
 # =============================================================================
@@ -4375,6 +4375,245 @@ def render_colour_legend(kind: str = "risk") -> None:
 
 # =============================================================================
 # HERO BANNER
+
+# =============================================================================
+# GLOSSARY / TOOLTIP SYSTEM
+# =============================================================================
+
+GLOSSARY: Dict[str, Dict[str, str]] = {
+    "regional_risk": {
+        "title": "Regional Risk Score",
+        "plain": "A number from 0 to 100 that shows how likely it is that the electricity grid in this area will have problems. 0 = very safe, 100 = very dangerous.",
+        "detail": "Calculated from 5 layers: weather stress (wind, rain, temperature, humidity, cloud), air quality, net load pressure (demand minus renewables), nearby outage count, and Energy Not Supplied. Calm UK winter typically scores 15–35.",
+    },
+    "resilience": {
+        "title": "Resilience Index",
+        "plain": "How well the grid can recover from disruptions. Higher is better. Above 80 = very strong. Below 40 = fragile — needs urgent attention.",
+        "detail": "Formula: 92 minus penalties for risk, social vulnerability, grid failure probability, renewable intermittency and cascade stress. Range: 15–100.",
+    },
+    "grid_failure": {
+        "title": "Grid Failure Probability",
+        "plain": "The chance that the electricity network will actually fail or cut out. In normal UK winter conditions this should be around 0.5–1.5%. During a storm it can rise to 20–45%.",
+        "detail": "Uses a two-regime logistic model calibrated against Ofgem RIIO-ED2 interruption statistics. Calm regime: max 4.5%. Storm regime: up to 75%.",
+    },
+    "ens": {
+        "title": "Energy Not Supplied (ENS)",
+        "plain": "How much electricity customers are NOT receiving because of outages — measured in megawatts (MW). Think of it as the size of the power cut. 100 MW = roughly 40,000 homes with no power for an hour.",
+        "detail": "In live mode: ENS = outage_count × 12 + affected_customers × 0.0025. In stress scenarios: includes base load fraction × scenario multiplier.",
+    },
+    "financial_loss": {
+        "title": "Financial Loss (£)",
+        "plain": "The estimated total cost of the power cuts — including lost business, spoiled food, repair crews, NHS costs for vulnerable people. This is NOT money the DNO loses directly; it is the total economic cost to society.",
+        "detail": "5 components: VoLL (£17,000/MWh), customer interruption (£38 each), business disruption (£1,100/MWh × business density), restoration (£18,500/outage), critical services (£320/MWh × social vulnerability).",
+    },
+    "priority": {
+        "title": "Investment Priority",
+        "plain": "A ranking that tells engineers and planners which areas need money spent on them most urgently. Priority 1 = act now. Monitor = no urgent action needed.",
+        "detail": "Scored using: risk (26%), resilience gap (20%), social vulnerability (18%), financial loss exposure (15%), ENS (11%), outage frequency (6%), existing recommendation score (4%). Bands: ≥78 Immediate, ≥60 High, ≥42 Medium, <42 Monitor.",
+    },
+    "iod_rows": {
+        "title": "Readable IoD Rows",
+        "plain": "How many rows of official government deprivation data (Index of Deprivation 2025) were successfully loaded from the data files. More rows = better postcode matching.",
+        "detail": "Source: DLUHC English Indices of Deprivation 2025. Place files in data/iod2025/ to enable full domain scoring.",
+    },
+    "imd": {
+        "title": "IMD Score (Index of Multiple Deprivation)",
+        "plain": "A measure of how deprived an area is across income, jobs, health, education, crime, housing and environment. HIGHER score = MORE deprived = MORE vulnerable to power cuts. Lower is better.",
+        "detail": "Normalised to 0–100 scale. 0 = least deprived in England, 100 = most deprived. Used to weight the social vulnerability score (60% IMD, 40% population density).",
+    },
+    "social_vulnerability": {
+        "title": "Social Vulnerability",
+        "plain": "How hard it would be for people in this area to cope without electricity. Areas with more elderly residents, lower incomes, or poorer health score higher — and a power cut there causes more harm.",
+        "detail": "Formula: 0.40 × clamp(pop_density/4500) × 100 + 0.60 × IMD_score. When IoD2025 data available: 70% IoD2025 composite + 30% fallback. Range 0–100.",
+    },
+    "final_risk_score": {
+        "title": "Final Risk Score",
+        "plain": "The overall danger level for this specific location right now. Takes into account weather, air quality, demand, nearby faults and energy not supplied.",
+        "detail": "Multi-layer model: weather (max 57pts) + pollution (15pts) + net load (10pts) + outage intensity (16pts) + ENS (14pts). Capped at 34 in calm live conditions.",
+    },
+    "resilience_index": {
+        "title": "Resilience Index",
+        "plain": "Same as Resilience Score — how robust this location is. 80–100: Robust (very safe). 60–79: Functional. 40–59: Stressed (needs watching). Below 40: Fragile (urgent).",
+        "detail": "resilience = 92 − (0.28×risk + 0.11×social + 9×grid_failure + 5×renewable_failure + 7×system_stress + finance_penalty). Range 15–100.",
+    },
+    "flood_depth_proxy": {
+        "title": "Flood Depth Proxy",
+        "plain": "An estimate of how deep surface flooding might be in this area (in metres). This is a model estimate — NOT an official flood warning. It helps show which substations might be underwater.",
+        "detail": "Proxy formula: (0.038×rain + 0.016×outages + 0.0025×risk + 0.001×cloud) × scenario_multiplier. Range 0–2.5m. Not a hydrological measurement.",
+    },
+    "renewable_failure": {
+        "title": "Renewable Failure Probability",
+        "plain": "The chance that wind turbines and solar panels are not generating enough electricity right now. High when it is both calm AND cloudy — common in winter anticyclones (called Dunkelflaute).",
+        "detail": "Formula: 0.12 + 0.48×(1−solar_n) + 0.30×(1−wind_n) + 0.15×cloud_n. Range 0–1.",
+    },
+    "fragile_stressed": {
+        "title": "Fragile / Stressed Areas",
+        "plain": "Fragile = resilience below 40 — needs urgent investment. Stressed = resilience 40–59 — needs monitoring and a plan. These are the areas most at risk of long power cuts.",
+        "detail": "Based on resilience_index thresholds: Robust ≥80, Functional ≥60, Stressed ≥40, Fragile <40.",
+    },
+    "max_failure_prob": {
+        "title": "Maximum Failure Probability",
+        "plain": "The highest single failure probability found across all locations and all hazard types. This is the worst-case combination — e.g. Newcastle during a compound storm.",
+        "detail": "From the enhanced logistic failure model: max(enhanced_failure_probability) across all place × hazard combinations.",
+    },
+    "programme_cost": {
+        "title": "Programme Cost Estimate",
+        "plain": "The total estimated cost to fix all the Priority 1 and Priority 2 network problems. This is a rough guide to help plan investment budgets — not a contract price.",
+        "detail": "Formula per postcode: £120,000 base + recommendation_score×£8,500 + outage_records×£35,000 + clip(ENS_MW,0,1000)×£260.",
+    },
+    "enhanced_failure_prob": {
+        "title": "Enhanced Failure Probability",
+        "plain": "A more detailed failure estimate that uses not just risk score but also the specific type of hazard (flood, wind, drought etc.), social vulnerability and outage history.",
+        "detail": "Calibrated logistic model with intercept −4.45. Calm live weather: max 18%. Full storm scenario: up to 95%.",
+    },
+    "failure_level": {
+        "title": "Failure Level",
+        "plain": "A simple label: Low / Moderate / High / Critical. Think of it like a traffic light for network failure risk.",
+        "detail": "Low <20%, Moderate 20–44%, High 45–69%, Critical ≥70%.",
+    },
+    "hazard_stress_score": {
+        "title": "Hazard Stress Score",
+        "plain": "How severely this specific type of hazard (e.g. flood, wind) is currently affecting this area. 0 = no stress, 100 = maximum stress.",
+        "detail": "Formula: clamp((driver_value − threshold_low)/(threshold_high − threshold_low) × 100, 0, 100). Driver and thresholds vary per hazard type.",
+    },
+    "failure_evidence": {
+        "title": "Failure Evidence",
+        "plain": "A summary of the exact numbers that went into calculating the failure probability — so you can see exactly why it is high or low.",
+        "detail": "Shows: base failure, grid failure, renewable failure, social vulnerability, hazard stress, nearby outages and ENS feeding into the logistic model.",
+    },
+    "dominant_drivers": {
+        "title": "Dominant Failure Drivers",
+        "plain": "The top reasons why this area has a high failure probability. Could be wind, flooding, social vulnerability, outage clustering etc.",
+        "detail": "Identified by checking which normalised input variables exceed 0.5–0.65 threshold in the logistic model.",
+    },
+    "recommendation_score": {
+        "title": "Recommendation Score",
+        "plain": "A score from 0 to 100 that tells you how urgently this postcode needs investment. Higher = more urgent. Think of it as a combined risk + vulnerability + impact score.",
+        "detail": "Weighted sum: 0.30×risk + 0.22×social + 0.18×(100−resilience) + 0.13×loss_n + 0.10×ENS_n + 0.07×outage_n.",
+    },
+    "indicative_cost": {
+        "title": "Indicative Investment Cost (£)",
+        "plain": "A rough estimate of how much it would cost to fix the network problems in this postcode. This is for budget planning only — real costs depend on asset surveys and tender prices.",
+        "detail": "Formula: £120,000 + score×£8,500 + outages×£35,000 + ENS_MW×£260. Based on Ofgem RIIO-ED2 average restoration and upgrade cost proxies.",
+    },
+    "bcr": {
+        "title": "Benefit-Cost Ratio (BCR)",
+        "plain": "How much financial harm is prevented for every £1 spent on fixing the network. BCR of 5 means every £1 spent saves £5 in power cut costs. Higher is better.",
+        "detail": "BCR = avoided_financial_loss / indicative_investment_cost. Avoided loss = total_financial_loss_gbp for that postcode.",
+    },
+    "live_baseline": {
+        "title": "Live Baseline",
+        "plain": "What the network looks like right now under real current conditions. This is the starting point — all the stress scenarios are compared against this.",
+        "detail": "Live mode uses measured weather from Open-Meteo APIs with no scenario multipliers applied. Calm-weather guards prevent false alarms.",
+    },
+    "total_modelled_loss": {
+        "title": "Total Modelled Loss",
+        "plain": "The total estimated economic cost of all power cuts across the whole region right now — added up across all locations.",
+        "detail": "Sum of total_financial_loss_gbp across all configured places. Includes VoLL, customer interruption, business disruption, restoration and critical services components.",
+    },
+    "p95_loss": {
+        "title": "P95 Loss (95th Percentile)",
+        "plain": "In 95 out of 100 scenarios, the financial loss would be no worse than this number. It represents a realistic worst case — not the absolute worst, but bad enough to plan for.",
+        "detail": "95th percentile of total_financial_loss_gbp across places. Used for risk-based capital planning.",
+    },
+    "immediate_funding": {
+        "title": "Immediate Funding Areas",
+        "plain": "Postcodes where the network is in such poor condition that investment is needed as soon as possible — not in 5 years. These are the red-flag areas.",
+        "detail": "Funding priority score ≥ 78/100. Typically 10–15% of postcodes qualify under normal live conditions.",
+    },
+    "top_funding_score": {
+        "title": "Top Funding Score",
+        "plain": "The highest priority score across all postcodes. A score of 78+ means at least one area urgently needs investment.",
+        "detail": "funding_priority_score = 0.26×risk + 0.20×(100−resilience) + 0.18×social + 0.15×loss_n + 0.11×ENS_n + 0.06×outage_n + 0.04×recommendation.",
+    },
+    "voll": {
+        "title": "VoLL Loss (Value of Lost Load)",
+        "plain": "The economic value of all the electricity that customers did NOT receive during the power cut. Think of it as: how much would customers have paid to keep their lights on?",
+        "detail": "VoLL = ENS_MWh × £17,000/MWh. Source: BEIS 2019 mixed domestic/commercial Value of Lost Load estimate.",
+    },
+    "customer_interruption": {
+        "title": "Customer Interruption Loss",
+        "plain": "The direct cost to each affected customer — spoiled food, lost time, inconvenience. A fixed £38 per customer regardless of how long the cut lasted.",
+        "detail": "£38 per affected customer. Source: Ofgem Interruptions Incentive Scheme proxy cost.",
+    },
+    "business_disruption": {
+        "title": "Business Disruption Loss",
+        "plain": "The extra cost to local businesses — lost sales, damaged stock, idle workers. Higher in areas with more shops and offices.",
+        "detail": "£1,100/MWh × business_density. Source: CBI business interruption cost surveys.",
+    },
+    "restoration_loss": {
+        "title": "Restoration Cost",
+        "plain": "The cost of sending repair crews out, fixing the fault and making the network safe again. Includes vehicles, materials, overtime and safety management.",
+        "detail": "£18,500 per outage incident. Source: Ofgem RIIO-ED2 average DNO restoration cost.",
+    },
+    "critical_services": {
+        "title": "Critical Services Loss",
+        "plain": "The extra cost when vulnerable people lose power — NHS facilities, care homes, people on medical equipment at home. Areas with more vulnerable residents score higher.",
+        "detail": "£320/MWh × (social_vulnerability/100). Represents NHS, care home and assisted-living extra costs.",
+    },
+    "cvar95": {
+        "title": "CVaR95 (Conditional Value at Risk)",
+        "plain": "The average financial loss in the worst 5% of scenarios — more useful than just knowing the worst case, because it tells you what to expect when things go really badly.",
+        "detail": "CVaR95 = mean(loss | loss ≥ P95_threshold). The correct exceedance-mean formula. Used for capital adequacy and risk buffer planning.",
+    },
+    "mean_resilience": {
+        "title": "Average Resilience",
+        "plain": "The average resilience score across all locations in the region. Above 68 is generally good for UK networks in normal conditions. Below 55 suggests widespread stress.",
+        "detail": "Simple arithmetic mean of resilience_index across all configured places.",
+    },
+    "matched_places": {
+        "title": "Matched Places",
+        "plain": "How many of the configured cities were successfully matched to official government deprivation data (IoD2025). More matches = more accurate social vulnerability scores.",
+        "detail": "Matching uses LAD name lookup, authority token matching, postcode prefix fallback and regional aggregation as a last resort.",
+    },
+}
+
+
+def glossary_expander(key: str) -> None:
+    """
+    Render an expandable glossary tooltip for a technical term.
+
+    Usage in any tab:
+        st.metric("Regional Risk", ...)
+        glossary_expander("regional_risk")
+    """
+    if key not in GLOSSARY:
+        return
+    item = GLOSSARY[key]
+    with st.expander(f"ℹ️ What does **{item['title']}** mean?", expanded=False):
+        st.markdown(
+            f"""
+            <div style="background:#f0f8ff;border-left:4px solid #3498db;
+                        border-radius:6px;padding:12px 14px;color:#1a252f;">
+            <b style="font-size:14px;">📖 In plain English:</b><br>
+            {item['plain']}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if item.get("detail"):
+            st.markdown(
+                f"""
+                <div style="background:#fafafa;border:1px solid #ddd;
+                            border-radius:6px;padding:10px 14px;color:#444;
+                            margin-top:8px;font-size:12px;">
+                <b>Technical detail:</b> {item['detail']}
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+
+def glossary_row(*keys: str) -> None:
+    """Render multiple glossary expanders in a row of columns."""
+    if not keys:
+        return
+    cols = st.columns(len(keys))
+    for col, key in zip(cols, keys):
+        with col:
+            glossary_expander(key)
+
+
 # =============================================================================
 
 def hero(region: str, scenario: str, mc_runs: int, refresh_id: int) -> None:
@@ -4403,7 +4642,7 @@ def hero(region: str, scenario: str, mc_runs: int, refresh_id: int) -> None:
                 <span class="chip" style="border-color:{scenario_colour};color:{scenario_colour};">
                     {html.escape(scenario)}
                 </span>
-                <span class="chip">MC: {mc_runs} runs</span>
+                <span class="chip">Model running</span>
                 <span class="chip">Refresh #{refresh_id}</span>
                 <span class="chip">UTC {datetime.now(UTC).strftime("%Y-%m-%d %H:%M")}</span>
             </div>
@@ -4436,6 +4675,9 @@ def metrics_panel(places: pd.DataFrame, pc: pd.DataFrame) -> None:
     c4.metric("ENS",                f"{total_ens} MW")
     c5.metric("Financial loss",     money_m(total_loss))
     c6.metric("Priority 1 areas",  p1)
+    # Glossary row below KPIs
+    st.markdown("<br>", unsafe_allow_html=True)
+    glossary_row("regional_risk", "resilience", "grid_failure", "ens", "financial_loss", "priority")
 
 
 # =============================================================================
@@ -5026,7 +5268,7 @@ def regional_intelligence_tab(
     c1, c2, c3, c4 = st.columns(4)
     if not df.empty:
         c1.metric("Highest risk",
-                  df.loc[df["final_risk_score"].idxmax(),  "place"])
+                  str(df.iloc[int(df["final_risk_score"].values.argmax())]["place"]) if not df.empty else "—")
         c2.metric("Lowest resilience",
                   df.loc[df["resilience_index"].idxmin(), "place"])
     c3.metric("Grid failure range",
@@ -5102,7 +5344,7 @@ def regional_intelligence_tab(
 # Continue with: PART 7 (BBC weather component, overview tab, resilience tab,
 #                         natural hazards tab, IoD2025 tab, EV/V2G tab)
 # =============================================================================
-# SAT-Guard Digital Twin — Q1 Final Edition
+# SAT-Guard Digital Twin — Final Edition
 # PART 7 of 10 — BBC weather animation, overview tab, resilience tab,
 #                natural hazards tab, IoD2025 tab, EV/V2G tab
 # =============================================================================
@@ -5683,6 +5925,7 @@ def overview_tab(
         g2.plotly_chart(create_resilience_gauge(avg_res, "Resilience"), use_container_width=True)
         # Full-width grid failure gauge
         st.plotly_chart(create_grid_failure_gauge(avg_gf), use_container_width=True)
+        glossary_expander("grid_failure")
 
     # Row 2
     a, b = st.columns(2)
@@ -5760,6 +6003,7 @@ def resilience_tab(places: pd.DataFrame) -> None:
     c2.metric("Mean resilience", f"{float(pd.to_numeric(places.get('resilience_index'), errors='coerce').mean()):.1f}")
     c3.metric("Fragile areas",   int((places["resilience_label"] == "Fragile").sum())  if "resilience_label" in places.columns else 0)
     c4.metric("Stressed areas",  int((places["resilience_label"] == "Stressed").sum()) if "resilience_label" in places.columns else 0)
+    glossary_row("resilience_index", "fragile_stressed", "grid_failure", "renewable_failure")
 
     a, b = st.columns(2)
     with a:
@@ -5940,6 +6184,7 @@ def render_iod2025_tab(places: pd.DataFrame) -> None:
     c4.metric("Max social vulnerability",
               f"{places['social_vulnerability'].max():.1f}/100"
               if "social_vulnerability" in places.columns else "N/A")
+    glossary_row("iod_rows", "matched_places", "social_vulnerability", "imd")
 
     st.markdown(
         f"""
@@ -6091,7 +6336,7 @@ def render_ev_v2g_tab(places: pd.DataFrame, scenario: str) -> None:
 # Continue with: PART 8 (failure/investment tab, scenario losses, finance/funding,
 #                         investment engine tab, export tab)
 # =============================================================================
-# SAT-Guard Digital Twin — Q1 Final Edition
+# SAT-Guard Digital Twin — Final Edition
 # PART 8 of 10 — Failure & investment tab, scenario losses tab,
 #                finance & funding tab, investment engine tab, export tab
 # =============================================================================
@@ -6131,6 +6376,7 @@ def render_failure_investment_tab(
               int((rec["investment_priority"]=="Priority 1").sum()) if rec is not None and not rec.empty else 0)
     c4.metric("Programme cost estimate",
               money_m(rec["indicative_investment_cost_gbp"].sum()) if rec is not None and not rec.empty else "£0.00m")
+    glossary_row("max_failure_prob", "programme_cost", "enhanced_failure_prob", "failure_level")
 
     # Grid failure per-place (shows the fix clearly)
     st.markdown("#### Grid failure probability per location")
@@ -6248,6 +6494,7 @@ def render_scenario_finance_tab(
     c2.metric("Live baseline risk",       f"{places['final_risk_score'].mean():.1f}/100")
     c3.metric("Live baseline resilience", f"{places['resilience_index'].mean():.1f}/100")
     c4.metric("Live baseline ENS",        f"{places['energy_not_supplied_mw'].sum():.1f} MW")
+    glossary_row("live_baseline", "ens", "financial_loss", "regional_risk")
 
     st.markdown(
         """
@@ -6335,6 +6582,7 @@ def render_finance_funding_tab(
     c2.metric("P95 place loss",          money_m(float(places["total_financial_loss_gbp"].quantile(0.95))))
     c3.metric("Immediate funding areas", int((funding["funding_priority_band"]=="Immediate funding").sum()))
     c4.metric("Top funding score",       f"{funding['funding_priority_score'].max():.1f}/100")
+    glossary_row("total_modelled_loss", "p95_loss", "immediate_funding", "top_funding_score")
 
     a, b = st.columns(2)
     with a:
@@ -6375,6 +6623,8 @@ def render_finance_funding_tab(
         unsafe_allow_html=True,
     )
 
+    glossary_row("voll", "customer_interruption", "business_disruption", "restoration_loss")
+    glossary_row("critical_services", "financial_loss")
     st.markdown("#### Financial loss by place")
     fin_cols = [
         "place", "energy_not_supplied_mw", "ens_mwh", "estimated_duration_hours",
@@ -6485,6 +6735,7 @@ def investment_tab(pc: pd.DataFrame, rec: pd.DataFrame) -> None:
     )
 
     st.markdown("#### Actionable recommendations")
+    glossary_row("recommendation_score", "indicative_cost", "bcr", "priority")
     rec_cols = [
         "postcode", "nearest_place", "investment_priority",
         "recommendation_score", "investment_category",
@@ -6765,7 +7016,7 @@ def render_pydeck_map(
 # END OF PART 8
 # Continue with: PART 9 (Monte Carlo tab, validation tab, method tab)
 # =============================================================================
-# SAT-Guard Digital Twin — Q1 Final Edition
+# SAT-Guard Digital Twin — Final Edition
 # PART 9 of 10 — Monte Carlo tab, validation tab, method/transparency tab
 # =============================================================================
 
@@ -6774,13 +7025,13 @@ def render_pydeck_map(
 # TAB: MONTE CARLO SIMULATION
 # =============================================================================
 
-def render_improved_monte_carlo_tab(
+def render_monte_carlo_tab(
     places: pd.DataFrame, simulations: int
 ) -> None:
     """
     Monte Carlo Simulation tab.
 
-    Uses the correlated Monte Carlo model (monte_carlo) which:
+    Uses the Q1-grade correlated Monte Carlo model (monte_carlo_correlated) which:
     - Uses a shared storm-shock variable to correlate wind/rain/outage/ENS
     - Applies triangular demand distribution
     - Uses lognormal restoration-cost tails
@@ -6795,17 +7046,18 @@ def render_improved_monte_carlo_tab(
     - Detailed MC table
     - Model explanation note
     """
-    st.subheader("Monte Carlo simulation: correlated storm, demand and restoration-cost uncertainty")
+    st.subheader("Monte Carlo Risk Analysis")
 
-    with st.spinner(f"Running Monte Carlo ({simulations:,} simulations per place)..."):
-        q1mc = build_q1_mc_table(places, simulations)
+    with st.spinner(f"Running Q1 Monte Carlo ({simulations:,} simulations per place)..."):
+        q1mc = build_mc_table(places, simulations)
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("P95 risk max",     f"{q1mc['mc_risk_p95'].max():.1f}/100",
-              q1mc.loc[q1mc['q1_mc_risk_p95'].idxmax(), 'place'])
+              str(q1mc.iloc[q1mc['mc_risk_p95'].values.argmax()].get('place','—')))
     c2.metric("Mean failure max", f"{q1mc['mc_failure_mean'].max()*100:.1f}%")
     c3.metric("CVaR95 loss max",  money_m(q1mc["mc_loss_cvar95_gbp"].max()))
     c4.metric("Simulations each", f"{simulations:,}")
+    glossary_row("cvar95", "mean_resilience", "p95_loss")
 
     # ── Row 1: scatter + histogram ────────────────────────────────────────
     a, b = st.columns(2)
@@ -6950,7 +7202,7 @@ def monte_carlo_tab(places: pd.DataFrame) -> None:
     Simple per-place Monte Carlo tab (uses mc_histogram from build_places).
 
     Shows per-place MC statistics computed during the main data pipeline.
-    For the correlated model, see render_improved_monte_carlo_tab.
+    For the correlated Q1 model, see render_monte_carlo_tab.
     """
     st.subheader("Per-place Monte Carlo (independent perturbations)")
 
@@ -7050,7 +7302,7 @@ def render_validation_tab(places: pd.DataFrame, scenario: str) -> None:
     if fail_count == 0 and warning_count == 0:
         st.markdown(
             '<div class="success-box">All validation checks passed. '
-            'The model meets transparency and calibration standards.</div>',
+            'The model meets Q1 transparency and calibration standards.</div>',
             unsafe_allow_html=True,
         )
     elif fail_count > 0:
@@ -7287,7 +7539,7 @@ def method_tab(places: pd.DataFrame) -> None:
     )
 
     # ── Monte Carlo ───────────────────────────────────────────────────────
-    st.markdown("### 7. Monte Carlo (correlated storm-shock)")
+    st.markdown("### 7. Q1 Monte Carlo (correlated storm-shock)")
     st.markdown(
         """
         <div class="formula">
@@ -7335,7 +7587,7 @@ def method_tab(places: pd.DataFrame) -> None:
 # END OF PART 9
 # Continue with: PART 10 (comprehensive README tab + main() entry point)
 # =============================================================================
-# SAT-Guard Digital Twin — Q1 Final Edition
+# SAT-Guard Digital Twin — Final Edition
 # PART 10 of 10 — Comprehensive README tab + main() entry point
 # =============================================================================
 
@@ -7425,7 +7677,7 @@ The sunburst shows the loss structure by place and component. The funding
 priority table applies the seven-criteria prioritisation formula.
 
 **Monte Carlo**
-The correlated Monte Carlo model. Uses a shared storm shock so wind, rain,
+The Correlated Monte Carlo model. Uses a shared storm shock so wind, rain,
 outage count and ENS co-move realistically. Shows mean, P95 and CVaR95 loss.
 CVaR95 uses the correct exceedance-mean formula.
 
@@ -7801,7 +8053,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     with st.sidebar:
         st.markdown("## ⚡ SAT-Guard")
-        st.caption("Digital Twin Control Panel")
+        st.caption("Digital Twin Control Panel — Final Edition")
         st.markdown("---")
 
         region = st.selectbox(
@@ -7809,13 +8061,10 @@ def main() -> None:
             help="Select the Northern Powergrid region to analyse.",
         )
 
-        mc_runs    = st.slider(
-            "MC runs (per-place model)", 10, 160, 40, 10,
-            help="Number of Monte Carlo iterations in the main data pipeline.",
-        )
-        q1_mc_runs = st.slider(
-            "MC simulations", 200, 5000, 1000, 100,
-            help="Simulations for the correlated Monte Carlo tab. Higher = more accurate tail estimates.",
+        mc_runs    = 40   # Fixed — internal pipeline iterations (not shown to user)
+        mc_simulations = st.slider(
+            "Monte Carlo simulations", 200, 3000, 1000, 100,
+            help="How many scenarios to run in the Monte Carlo Risk tab. More = more accurate tail estimates but slower.",
         )
 
         st.markdown("---")
@@ -7931,7 +8180,7 @@ def main() -> None:
         "📉 Scenario losses",          # 7
         "💷 Finance & funding",        # 8
         "💼 Investment engine",        # 9
-        "🎲 Monte Carlo",              # 10
+        "🎲 Monte Carlo Analysis",              # 10
         "✅ Validation",               # 11
         "🔬 Method",                   # 12
         "📖 README",                   # 13
@@ -7960,7 +8209,7 @@ def main() -> None:
         render_failure_investment_tab(places, pc, rec)
 
     with tabs[7]:
-        render_scenario_finance_tab(places, region, mc_runs)
+        render_scenario_finance_tab(places, region, 40)
 
     with tabs[8]:
         render_finance_funding_tab(places, pc)
@@ -7969,7 +8218,7 @@ def main() -> None:
         investment_tab(pc, rec)
 
     with tabs[10]:
-        render_improved_monte_carlo_tab(places, q1_mc_runs)
+        render_monte_carlo_tab(places, mc_simulations)
 
     with tabs[11]:
         render_validation_tab(places, active_scenario)
