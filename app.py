@@ -10347,12 +10347,14 @@ def _get_briefs() -> dict:
 
 def render_tab_brief(tab_key: str) -> None:
     """
-    Render an academic presentation brief using components.html.
+    Render an academic presentation brief inside a Streamlit expander.
 
-    Strategy: always fully visible (no toggle) so iframe height is fixed.
-    Streamlit's iframe cannot resize dynamically after load, so we render
-    the brief always-expanded at a fixed height with internal scroll.
-    A thin coloured header bar acts as the visual label.
+    Uses components.html with a generous fixed height and scrolling=True
+    so the full content (text + SVG figure) is always visible.
+
+    Layout: coloured header bar | two-column grid (text left, SVG right).
+    The right column SVG is given a fixed 300px width so it never squeezes.
+    Body overflow is visible/scroll — never hidden — to prevent SVG clipping.
     """
     BRIEFS = _get_briefs()
     if tab_key not in BRIEFS:
@@ -10365,112 +10367,68 @@ def render_tab_brief(tab_key: str) -> None:
         for p in b["pills"]
     )
 
-    accent  = b["tag_color"]
-    text_c  = b["tag_text_color"]
-    visual  = b["svg_or_html"]
+    accent = b["tag_color"]
+    text_c = b["tag_text_color"]
+    visual = b["svg_or_html"]
 
-    html_code = f"""<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<style>
-*{{box-sizing:border-box;margin:0;padding:0;}}
-body{{
-  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-  background:#fff;
-  color:#1a252f;
-  font-size:13px;
-  border:1px solid #e5e7eb;
-  border-radius:12px;
-  overflow:hidden;
-}}
-.header{{
-  background:{accent};
-  color:{text_c};
-  padding:9px 16px;
-  display:flex;
-  align-items:center;
-  gap:10px;
-  font-size:11px;
-  font-weight:700;
-  letter-spacing:.05em;
-  text-transform:uppercase;
-  border-radius:11px 11px 0 0;
-}}
-.header .tabnum{{opacity:.7;font-weight:500;}}
-.header .tabname{{font-size:13px;font-weight:700;text-transform:none;letter-spacing:0;}}
-.body{{
-  padding:16px;
-  display:grid;
-  grid-template-columns:1.1fr 0.9fr;
-  gap:18px;
-  align-items:start;
-}}
-.left{{}}
-.right svg{{width:100%;border-radius:8px;border:1px solid #f0f0f0;}}
-.sub{{font-size:12px;color:#666;line-height:1.6;margin-bottom:13px;border-left:3px solid {accent};padding-left:10px;}}
-.sec-title{{
-  font-size:10px;font-weight:700;letter-spacing:.08em;
-  text-transform:uppercase;color:#aaa;margin-bottom:3px;margin-top:12px;
-}}
-.sec-body{{font-size:12px;color:#333;line-height:1.65;}}
-.divider{{height:1px;background:#f0f0f0;margin:8px 0;}}
-.pills{{margin-top:12px;}}
-.pill{{
-  display:inline-block;font-size:11px;padding:2px 9px;border-radius:6px;
-  margin:2px 3px 2px 0;font-weight:500;
-  background:{accent};color:{text_c};opacity:.9;
-  border:1px solid rgba(0,0,0,.08);
-}}
-.ref{{
-  font-size:10px;color:#aaa;margin-top:10px;
-  line-height:1.6;
-  background:#fafafa;
-  border:1px solid #eee;
-  border-radius:6px;
-  padding:7px 10px;
-}}
-</style>
-</head>
-<body>
-
-<div class="header">
-  <span class="tabnum">Tab {b['tab_number']}</span>
-  <span style="opacity:.4">|</span>
-  <span>{b['tag']}</span>
-  <span style="margin-left:auto;opacity:.5;font-weight:400;text-transform:none;font-size:11px;">Academic brief</span>
-</div>
-
-<div class="body">
-  <div class="left">
-    <div class="sub">{b['subtitle']}</div>
-
-    <div class="sec-title">What we did</div>
-    <div class="sec-body">{b['what_did']}</div>
-    <div class="divider"></div>
-
-    <div class="sec-title">Key result</div>
-    <div class="sec-body">{b['what_result']}</div>
-    <div class="divider"></div>
-
-    <div class="sec-title">Why it matters</div>
-    <div class="sec-body">{b['why_matters']}</div>
-
-    <div class="pills">{pills_html}</div>
-    <div class="ref">{b['refs']}</div>
-  </div>
-
-  <div class="right">{visual}</div>
-</div>
-
-</body>
-</html>"""
+    html_code = (
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        "<style>"
+        "*{box-sizing:border-box;margin:0;padding:0;}"
+        "html,body{background:#fff;color:#1a252f;"
+        "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;"
+        "font-size:13px;overflow:visible;}"
+        f".hdr{{background:{accent};color:{text_c};"
+        "padding:9px 16px;display:flex;align-items:center;gap:10px;"
+        "font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;}}"
+        ".hdr .name{font-size:14px;font-weight:700;text-transform:none;letter-spacing:0;}"
+        ".hdr .meta{margin-left:auto;font-size:10px;font-weight:400;opacity:.6;text-transform:none;}"
+        ".body{padding:16px;display:grid;grid-template-columns:1fr 300px;gap:16px;align-items:start;}"
+        ".right svg{width:300px;height:auto;border-radius:8px;border:1px solid #f0f0f0;display:block;}"
+        ".sub{font-size:12px;color:#555;line-height:1.65;margin-bottom:12px;"
+        f"border-left:3px solid {accent};padding-left:10px;}}"
+        ".st{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;"
+        "color:#bbb;margin-bottom:3px;margin-top:10px;}"
+        ".sb{font-size:12px;color:#333;line-height:1.65;}"
+        ".div{height:1px;background:#f0f0f0;margin:8px 0;}"
+        ".pills{margin-top:12px;}"
+        f".pill{{display:inline-block;font-size:11px;padding:2px 9px;border-radius:6px;"
+        f"margin:2px 3px 2px 0;font-weight:500;background:{accent};"
+        f"color:{text_c};opacity:.85;border:1px solid rgba(0,0,0,.08);}}"
+        ".ref{font-size:10px;color:#aaa;margin-top:10px;line-height:1.6;"
+        "background:#fafafa;border:1px solid #eee;border-radius:6px;padding:7px 10px;}"
+        "</style></head><body>"
+        f"<div class='hdr'>"
+        f"<span style='opacity:.65;'>Tab {b['tab_number']}</span>"
+        f"<span style='opacity:.35;'>|</span>"
+        f"<span>{b['tag']}</span>"
+        f"<span class='name'>{b['tab_name']}</span>"
+        f"<span class='meta'>Academic brief</span>"
+        f"</div>"
+        "<div class='body'>"
+        "<div class='left'>"
+        f"<div class='sub'>{b['subtitle']}</div>"
+        "<div class='st'>What we did</div>"
+        f"<div class='sb'>{b['what_did']}</div>"
+        "<div class='div'></div>"
+        "<div class='st'>Key result</div>"
+        f"<div class='sb'>{b['what_result']}</div>"
+        "<div class='div'></div>"
+        "<div class='st'>Why it matters</div>"
+        f"<div class='sb'>{b['why_matters']}</div>"
+        f"<div class='pills'>{pills_html}</div>"
+        f"<div class='ref'>{b['refs']}</div>"
+        "</div>"
+        f"<div class='right'>{visual}</div>"
+        "</div>"
+        "</body></html>"
+    )
 
     with st.expander(
         f"📋 Academic brief — {b['tab_name']}",
         expanded=False,
     ):
-        components.html(html_code, height=540, scrolling=True)
+        components.html(html_code, height=620, scrolling=True)
 
 def render_readme_tab() -> None:
     """Render the full README documentation tab."""
