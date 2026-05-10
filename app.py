@@ -10346,567 +10346,513 @@ def _get_briefs() -> dict:
 
 
 
+
 # =============================================================================
-# FIGURE ZOOM + STEP ANIMATION SYSTEM
-# =============================================================================
-# Each figure (SVG) in the academic brief becomes clickable.
-# Clicking opens a full-panel modal with step-by-step calculation walkthrough.
-#
-# Architecture:
-#   _FIGURE_STEPS  — dict mapping tab_key → list of step dicts
-#   _MODAL_JS      — self-contained JS modal engine (vanilla JS, no deps)
-#   _wrap_svg_clickable(svg, tab_key) — wraps an SVG in a clickable container
-#   render_tab_brief() injects the modal HTML + calls _wrap_svg_clickable
+# ANIMATED STEPPER SYSTEM — all 15 tabs
+# Each tab brief figure is replaced by a full animated stepper.
+# render_tab_brief() calls _render_tab_stepper(tab_key) which builds
+# a self-contained components.html stepper with emoji, animations,
+# progress bar and step-by-step calculation walkthrough.
 # =============================================================================
 
-_FIGURE_STEPS: dict = {
+_TAB_STEPPERS: dict = {
 
-    "overview": [
-        {"title": "Layer 1 — Weather (max 57 pts)",
-         "color": "#378ADD",
-         "formula": "weather_s = (wind−18)/52×24 + (rain−1.5)/23.5×20 + temp_pen×8 + humid_pen×2 + cloud_pen×3",
-         "explain": "Weather is the largest single driver — up to 57 of 100 risk points. Wind and rain dominate. Each variable is normalised to 0–1 then scaled. Below threshold (wind<18, rain<1.5) the contribution is zero — no false alarms in calm UK weather."},
-        {"title": "Layer 2 — Air quality (max 15 pts)",
-         "color": "#BA7517",
-         "formula": "pollution_s = clip((AQI−55)/95, 0,1)×10 + clip((PM25−20)/50, 0,1)×5",
-         "explain": "Poor air quality (AQI>55, PM2.5>20) signals industrial events or weather conditions that impair crew operations and outdoor equipment. Contributes up to 15 points."},
-        {"title": "Layer 3 — Net load pressure (max 10 pts)",
-         "color": "#1D9E75",
-         "formula": "net_load_s = clip((peak_load_mw − renewable_mw) / 220, 0,1) × 10",
-         "explain": "When demand is high but renewables are low (Dunkelflaute — dark, windless periods), the grid is under maximum thermal stress. This layer captures the demand-supply balance. Max 10 points."},
-        {"title": "Layer 4 — Outage intensity (max 16 pts)",
-         "color": "#e67e22",
-         "formula": "outage_s = clip(nearby_outages / 20, 0,1) × 16",
-         "explain": "Active outages within 25 km indicate real-world network stress — not just weather forecasts. This layer is the most direct evidence of actual grid problems. Max 16 points."},
-        {"title": "Layer 5 — ENS exposure (max 14 pts)",
-         "color": "#7F77DD",
-         "formula": "ens_s = clip(ENS_MW / 2500, 0,1) × 14",
-         "explain": "Energy Not Supplied in MW. Large ENS means many customers are already without power. This amplifies risk because restoration resources are already deployed. Max 14 points."},
-        {"title": "Calm guard + final score",
-         "color": "#27ae60",
-         "formula": "if live AND wind<24 AND rain<2 AND outages≤3:  risk = min(raw_sum, 36)",
-         "explain": "The calm-weather guard prevents the dashboard showing false-alarm risk scores in normal UK winter conditions. Without it, even a breezy cloudy day would score 30–40. With it, calm live readings show 8–18 — matching Ofgem RIIO-ED2 historical data. Stress scenarios bypass this cap entirely."},
-    ],
+"overview": {
+    "title": "How regional risk is calculated",
+    "steps": [
+        {"e":"🌬️","t":"Weather layer — max 57 pts",
+         "body":"""<div style='font-size:13px;color:#475569;line-height:1.7;margin-bottom:12px;'>Weather is the <b style='color:#3b82f6;'>biggest single driver</b> — up to 57 of 100 risk points. Five variables normalised then weighted.</div>
+<div style='display:flex;flex-direction:column;gap:7px;'>
+<div class='ar' style='animation-delay:.08s;background:#eff6ff;border:1px solid #bfdbfe;border-radius:9px;padding:9px 13px;display:flex;align-items:center;gap:10px;'><span style='font-size:20px;'>💨</span><span style='flex:1;font-size:12px;color:#1d4ed8;font-weight:500;'>Wind speed</span><span style='background:#dbeafe;color:#1d4ed8;font-size:11px;font-weight:700;padding:2px 9px;border-radius:12px;'>×24 pts</span></div>
+<div class='ar' style='animation-delay:.18s;background:#eff6ff;border:1px solid #bfdbfe;border-radius:9px;padding:9px 13px;display:flex;align-items:center;gap:10px;'><span style='font-size:20px;'>🌧️</span><span style='flex:1;font-size:12px;color:#1d4ed8;font-weight:500;'>Rainfall</span><span style='background:#dbeafe;color:#1d4ed8;font-size:11px;font-weight:700;padding:2px 9px;border-radius:12px;'>×20 pts</span></div>
+<div class='ar' style='animation-delay:.28s;background:#eff6ff;border:1px solid #bfdbfe;border-radius:9px;padding:9px 13px;display:flex;align-items:center;gap:10px;'><span style='font-size:20px;'>🌡️</span><span style='flex:1;font-size:12px;color:#1d4ed8;font-weight:500;'>Temperature deviation</span><span style='background:#dbeafe;color:#1d4ed8;font-size:11px;font-weight:700;padding:2px 9px;border-radius:12px;'>×8 pts</span></div>
+<div class='ar' style='animation-delay:.38s;background:#eff6ff;border:1px solid #bfdbfe;border-radius:9px;padding:9px 13px;display:flex;align-items:center;gap:10px;'><span style='font-size:20px;'>💧</span><span style='flex:1;font-size:12px;color:#1d4ed8;font-weight:500;'>Humidity</span><span style='background:#dbeafe;color:#1d4ed8;font-size:11px;font-weight:700;padding:2px 9px;border-radius:12px;'>×2 pts</span></div>
+<div class='ar' style='animation-delay:.48s;background:#eff6ff;border:1px solid #bfdbfe;border-radius:9px;padding:9px 13px;display:flex;align-items:center;gap:10px;'><span style='font-size:20px;'>☁️</span><span style='flex:1;font-size:12px;color:#1d4ed8;font-weight:500;'>Cloud cover</span><span style='background:#dbeafe;color:#1d4ed8;font-size:11px;font-weight:700;padding:2px 9px;border-radius:12px;'>×3 pts</span></div>
+</div>
+<div class='af' style='animation-delay:.65s;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:9px 13px;margin-top:10px;'><div style='font-size:10px;color:#166534;font-weight:700;text-transform:uppercase;margin-bottom:3px;'>Formula</div><div style='font-size:11px;color:#15803d;font-family:monospace;'>(wind−18)/52×24 + (rain−1.5)/23.5×20 + ...</div></div>""",
+         "viz":"<svg viewBox='0 0 220 250' style='width:100%;max-width:220px;'><circle cx='110' cy='105' r='82' fill='#eff6ff' stroke='#bfdbfe' stroke-width='1.5'/><circle cx='110' cy='105' r='82' fill='none' stroke='#3b82f6' stroke-width='9' stroke-dasharray='258 258' stroke-linecap='round' transform='rotate(-90 110 105)' style='stroke-dashoffset:258;animation:drawL 1.2s .3s ease forwards;'/><text x='110' y='96' text-anchor='middle' font-size='38' font-weight='700' fill='#1d4ed8' font-family='sans-serif'>57</text><text x='110' y='118' text-anchor='middle' font-size='12' fill='#64748b' font-family='sans-serif'>max pts</text><text x='110' y='134' text-anchor='middle' font-size='11' fill='#94a3b8' font-family='sans-serif'>out of 100</text><text x='110' y='215' text-anchor='middle' font-size='13' font-weight='600' fill='#3b82f6' font-family='sans-serif'>🌬️ Weather layer</text><text x='110' y='232' text-anchor='middle' font-size='11' fill='#94a3b8' font-family='sans-serif'>largest single driver</text></svg>"},
+        {"e":"📊","t":"All 5 layers combined",
+         "body":"""<div style='font-size:13px;color:#475569;line-height:1.7;margin-bottom:12px;'>All 5 layers add up. In a major storm all fire simultaneously — reaching 80–100.</div>
+<div style='display:flex;flex-direction:column;gap:7px;'>
+<div class='ar' style='animation-delay:.05s;display:flex;align-items:center;gap:10px;padding:8px 13px;background:#eff6ff;border-radius:9px;'><span style='font-size:18px;'>🌬️</span><span style='flex:1;font-size:12px;color:#1d4ed8;font-weight:500;'>Weather</span><span style='background:#3b82f6;color:#fff;font-size:12px;font-weight:700;padding:2px 10px;border-radius:10px;'>57</span></div>
+<div class='ar' style='animation-delay:.15s;display:flex;align-items:center;gap:10px;padding:8px 13px;background:#fffbeb;border-radius:9px;'><span style='font-size:18px;'>🏭</span><span style='flex:1;font-size:12px;color:#92400e;font-weight:500;'>Air quality (AQI)</span><span style='background:#f59e0b;color:#fff;font-size:12px;font-weight:700;padding:2px 10px;border-radius:10px;'>15</span></div>
+<div class='ar' style='animation-delay:.25s;display:flex;align-items:center;gap:10px;padding:8px 13px;background:#f0fdf4;border-radius:9px;'><span style='font-size:18px;'>⚡</span><span style='flex:1;font-size:12px;color:#166534;font-weight:500;'>Net load pressure</span><span style='background:#10b981;color:#fff;font-size:12px;font-weight:700;padding:2px 10px;border-radius:10px;'>10</span></div>
+<div class='ar' style='animation-delay:.35s;display:flex;align-items:center;gap:10px;padding:8px 13px;background:#fff7ed;border-radius:9px;'><span style='font-size:18px;'>🔴</span><span style='flex:1;font-size:12px;color:#9a3412;font-weight:500;'>Outage intensity</span><span style='background:#f97316;color:#fff;font-size:12px;font-weight:700;padding:2px 10px;border-radius:10px;'>16</span></div>
+<div class='ar' style='animation-delay:.45s;display:flex;align-items:center;gap:10px;padding:8px 13px;background:#f5f3ff;border-radius:9px;'><span style='font-size:18px;'>📉</span><span style='flex:1;font-size:12px;color:#4c1d95;font-weight:500;'>ENS exposure</span><span style='background:#8b5cf6;color:#fff;font-size:12px;font-weight:700;padding:2px 10px;border-radius:10px;'>14</span></div>
+<div class='ar' style='animation-delay:.6s;display:flex;align-items:center;gap:10px;padding:9px 13px;background:#0f172a;border-radius:9px;margin-top:2px;'><span style='font-size:18px;'>🎯</span><span style='flex:1;font-size:13px;color:#f1f5f9;font-weight:700;'>Total → capped at 100</span><span style='background:#6366f1;color:#fff;font-size:12px;font-weight:700;padding:2px 10px;border-radius:10px;'>=112→100</span></div>
+</div>""",
+         "viz":"<svg viewBox='0 0 180 280' style='width:100%;max-width:180px;'><rect x='10' y='20' width='48' height='230' rx='6' fill='#e2e8f0'/><rect x='10' y='141' width='48' height='109' rx='0' fill='#3b82f6' class='af' style='animation-delay:.05s;'/><rect x='10' y='108' width='48' height='33' rx='0' fill='#f59e0b' class='af' style='animation-delay:.15s;'/><rect x='10' y='84' width='48' height='24' rx='0' fill='#10b981' class='af' style='animation-delay:.25s;'/><rect x='10' y='45' width='48' height='39' rx='0' fill='#f97316' class='af' style='animation-delay:.35s;'/><rect x='10' y='20' width='48' height='25' rx='6' fill='#8b5cf6' class='af' style='animation-delay:.45s;'/><text x='34' y='268' text-anchor='middle' font-size='10' fill='#64748b' font-family='sans-serif'>Risk 0–100</text><line x1='62' y1='130' x2='100' y2='130' stroke='#0f172a' stroke-width='1.5' marker-end='url(#a2)' class='al' style='animation-delay:.7s;stroke-dasharray:50;stroke-dashoffset:50;'/><defs><marker id='a2' viewBox='0 0 10 10' refX='8' refY='5' markerWidth='5' markerHeight='5' orient='auto'><path d='M2 1L8 5L2 9' fill='none' stroke='#0f172a' stroke-width='1.5'/></marker></defs><rect x='102' y='108' width='66' height='44' rx='9' fill='#fef2f2' stroke='#ef4444' stroke-width='1.5' class='ap' style='animation-delay:.8s;'/><text x='135' y='127' text-anchor='middle' font-size='12' font-weight='700' fill='#dc2626' font-family='sans-serif' class='af' style='animation-delay:.85s;'>🎯 Risk</text><text x='135' y='143' text-anchor='middle' font-size='10' fill='#ef4444' font-family='sans-serif' class='af' style='animation-delay:.85s;'>0–100</text></svg>"},
+        {"e":"🛡️","t":"Calm-weather guard",
+         "body":"""<div style='font-size:13px;color:#475569;line-height:1.7;margin-bottom:12px;'>In live mode a <b style='color:#16a34a;'>🛡️ calm guard</b> caps risk at 36. Prevents false alarms on normal UK winter days.</div>
+<div class='af' style='animation-delay:.1s;background:#fefce8;border:1px solid #fde047;border-radius:10px;padding:12px 14px;margin-bottom:12px;'><div style='font-size:11px;color:#a16207;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:7px;'>🔍 Conditions checked</div><div style='display:flex;flex-direction:column;gap:5px;'><div style='font-size:12px;color:#92400e;font-family:monospace;'>✅  Live mode (not a scenario)</div><div style='font-size:12px;color:#92400e;font-family:monospace;'>💨  Wind &lt; 24 km/h</div><div style='font-size:12px;color:#92400e;font-family:monospace;'>🌧️  Rain &lt; 2 mm/h</div><div style='font-size:12px;color:#92400e;font-family:monospace;'>🔴  Outages ≤ 3</div></div></div>
+<div style='display:grid;grid-template-columns:1fr 1fr;gap:10px;'>
+<div class='ap' style='animation-delay:.35s;background:#dcfce7;border:1px solid #86efac;border-radius:10px;padding:12px;text-align:center;'><div style='font-size:22px;margin-bottom:4px;'>🌤️</div><div style='font-size:20px;font-weight:700;color:#15803d;'>10–18</div><div style='font-size:10px;color:#166534;margin-top:2px;'>Calm UK winter ✓</div></div>
+<div class='ap' style='animation-delay:.5s;background:#fee2e2;border:1px solid #fca5a5;border-radius:10px;padding:12px;text-align:center;'><div style='font-size:22px;margin-bottom:4px;'>⛈️</div><div style='font-size:20px;font-weight:700;color:#dc2626;'>72–92</div><div style='font-size:10px;color:#991b1b;margin-top:2px;'>Storm — cap bypassed</div></div>
+</div>""",
+         "viz":"<svg viewBox='0 0 180 220' style='width:100%;max-width:180px;'><rect x='20' y='20' width='140' height='44' rx='8' fill='#f1f5f9' stroke='#cbd5e1' stroke-width='1'/><text x='90' y='38' text-anchor='middle' font-size='11' fill='#64748b' font-family='sans-serif'>Raw score</text><text x='90' y='56' text-anchor='middle' font-size='22' font-weight='700' fill='#475569' font-family='sans-serif'>38</text><line x1='90' y1='64' x2='90' y2='94' stroke='#16a34a' stroke-width='2' marker-end='url(#ag)' class='al' style='animation-delay:.4s;stroke-dasharray:40;stroke-dashoffset:40;'/><defs><marker id='ag' viewBox='0 0 10 10' refX='8' refY='5' markerWidth='5' markerHeight='5' orient='auto'><path d='M2 1L8 5L2 9' fill='none' stroke='#16a34a' stroke-width='1.5'/></marker></defs><rect x='20' y='96' width='140' height='30' rx='7' fill='#fefce8' stroke='#fde047' stroke-width='1' class='ap' style='animation-delay:.5s;'/><text x='90' y='115' text-anchor='middle' font-size='11' fill='#a16207' font-family='sans-serif' class='af' style='animation-delay:.5s;'>🛡️ min(38, 36) = ?</text><line x1='90' y1='128' x2='90' y2='155' stroke='#16a34a' stroke-width='2' marker-end='url(#ag)' class='al' style='animation-delay:.7s;stroke-dasharray:35;stroke-dashoffset:35;'/><rect x='30' y='157' width='120' height='44' rx='10' fill='#dcfce7' stroke='#16a34a' stroke-width='2' class='ap' style='animation-delay:.8s;'/><text x='90' y='175' text-anchor='middle' font-size='11' fill='#166534' font-weight='700' font-family='sans-serif' class='af' style='animation-delay:.85s;'>🛡️ Capped at 36</text><text x='90' y='192' text-anchor='middle' font-size='20' font-weight='700' fill='#16a34a' font-family='sans-serif' class='af' style='animation-delay:.9s;'>✓ Realistic</text></svg>"},
+        {"e":"🔮","t":"Grid failure probability",
+         "body":"""<div style='font-size:13px;color:#475569;line-height:1.7;margin-bottom:12px;'>Risk feeds a <b style='color:#8b5cf6;'>🔮 logistic failure model</b>. Two regimes: calm (max 4.5%) and storm (max 75%). Calibrated to UK ~1%.</div>
+<div class='af' style='animation-delay:.1s;background:#f5f3ff;border:1px solid #c4b5fd;border-radius:10px;padding:11px 14px;margin-bottom:10px;'><div style='font-size:10px;color:#5b21b6;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:5px;'>🔢 Z-score formula</div><div style='font-size:11px;color:#6d28d9;font-family:monospace;line-height:1.8;'>z = −4.45 + 1.05×base + 0.95×grid<br>+ 0.45×social_n + 0.25×risk_n<br>prob = 1 / (1 + exp(−z))</div></div>
+<div style='display:grid;grid-template-columns:1fr 1fr;gap:8px;'>
+<div class='ap' style='animation-delay:.35s;background:#f0fdf4;border:1px solid #86efac;border-radius:9px;padding:9px 10px;text-align:center;'><div style='font-size:20px;'>🌤️</div><div style='font-size:18px;font-weight:700;color:#15803d;margin:3px 0;'>0.5–1.5%</div><div style='font-size:10px;color:#16a34a;'>Calm UK winter</div></div>
+<div class='ap' style='animation-delay:.5s;background:#fff7ed;border:1px solid #fed7aa;border-radius:9px;padding:9px 10px;text-align:center;'><div style='font-size:20px;'>⛈️</div><div style='font-size:18px;font-weight:700;color:#c2410c;margin:3px 0;'>20–65%</div><div style='font-size:10px;color:#ea580c;'>Storm regime</div></div>
+<div class='ap' style='animation-delay:.65s;background:#fdf2f8;border:1px solid #f0abfc;border-radius:9px;padding:9px 10px;text-align:center;'><div style='font-size:20px;'>🛡️</div><div style='font-size:14px;font-weight:600;color:#7e22ce;margin:3px 0;'>Calm guard</div><div style='font-size:10px;color:#9333ea;'>×0.35, cap 18%</div></div>
+<div class='ap' style='animation-delay:.8s;background:#e0f2fe;border:1px solid #7dd3fc;border-radius:9px;padding:9px 10px;text-align:center;'><div style='font-size:20px;'>📏</div><div style='font-size:14px;font-weight:600;color:#0369a1;margin:3px 0;'>RIIO-ED2</div><div style='font-size:10px;color:#0284c7;'>Calibration source</div></div>
+</div>""",
+         "viz":"<svg viewBox='0 0 200 210' style='width:100%;max-width:200px;'><polyline fill='none' stroke='#e2e8f0' stroke-width='1' points='18,180 182,180'/><polyline fill='none' stroke='#e2e8f0' stroke-width='1' points='18,180 18,30'/><polyline fill='none' stroke='#8b5cf6' stroke-width='2.5' stroke-linecap='round' points='18,178 33,176 48,172 63,165 78,152 93,133 108,113 123,96 138,82 153,72 168,65 181,62' style='stroke-dasharray:400;stroke-dashoffset:400;animation:drawL .8s .2s ease forwards;'/><circle cx='105' cy='113' r='5' fill='#8b5cf6' class='ap' style='animation-delay:1.1s;'/><text x='114' y='110' font-size='9' fill='#7c3aed' font-family='sans-serif' class='af' style='animation-delay:1.1s;'>50% at risk=58</text><circle cx='36' cy='177' r='4' fill='#10b981' class='ap' style='animation-delay:1.3s;'/><text x='42' y='173' font-size='9' fill='#059669' font-family='sans-serif' class='af' style='animation-delay:1.3s;'>~1% calm 🌤️</text><text x='18' y='188' font-size='9' fill='#94a3b8' font-family='sans-serif'>0</text><text x='175' y='188' font-size='9' fill='#94a3b8' font-family='sans-serif'>100</text><text x='8' y='183' font-size='9' fill='#94a3b8' font-family='sans-serif'>0%</text><text x='8' y='34' font-size='9' fill='#94a3b8' font-family='sans-serif'>100%</text><text x='100' y='200' text-anchor='middle' font-size='10' fill='#64748b' font-family='sans-serif'>🔮 Logistic curve</text></svg>"},
+        {"e":"🛡️","t":"Resilience index — 92 minus penalties",
+         "body":"""<div style='font-size:13px;color:#475569;line-height:1.7;margin-bottom:12px;'><b style='color:#10b981;'>🛡️ Resilience = 92 minus penalties.</b> Six factors reduce it. Calm UK areas typically 68–82.</div>
+<div style='display:flex;flex-direction:column;gap:6px;'>
+<div class='ar' style='animation-delay:.05s;display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#f0fdf4;border-radius:8px;border:1px solid #bbf7d0;'><span style='font-size:13px;font-weight:700;color:#166534;'>🏁 Base score</span><span style='font-size:15px;font-weight:700;color:#15803d;'>92</span></div>
+<div class='ar' style='animation-delay:.15s;display:flex;justify-content:space-between;align-items:center;padding:7px 12px;background:#fef2f2;border-radius:8px;'><span style='font-size:12px;color:#991b1b;'>⚠️  − 0.28 × risk score</span><span style='font-size:11px;color:#dc2626;font-weight:600;'>max −28</span></div>
+<div class='ar' style='animation-delay:.25s;display:flex;justify-content:space-between;align-items:center;padding:7px 12px;background:#fef2f2;border-radius:8px;'><span style='font-size:12px;color:#991b1b;'>🏘️  − 0.11 × social vuln.</span><span style='font-size:11px;color:#dc2626;font-weight:600;'>max −11</span></div>
+<div class='ar' style='animation-delay:.35s;display:flex;justify-content:space-between;align-items:center;padding:7px 12px;background:#fef2f2;border-radius:8px;'><span style='font-size:12px;color:#991b1b;'>⚡  − 9 × grid_failure_prob</span><span style='font-size:11px;color:#dc2626;font-weight:600;'>max −9</span></div>
+<div class='ar' style='animation-delay:.45s;display:flex;justify-content:space-between;align-items:center;padding:7px 12px;background:#fef2f2;border-radius:8px;'><span style='font-size:12px;color:#991b1b;'>🌬️  − 5 × renewable_fail</span><span style='font-size:11px;color:#dc2626;font-weight:600;'>max −5</span></div>
+<div class='ar' style='animation-delay:.55s;display:flex;justify-content:space-between;align-items:center;padding:7px 12px;background:#fef2f2;border-radius:8px;'><span style='font-size:12px;color:#991b1b;'>🔗  − 7 × cascade stress</span><span style='font-size:11px;color:#dc2626;font-weight:600;'>max −7</span></div>
+<div class='ar' style='animation-delay:.68s;display:flex;justify-content:space-between;align-items:center;padding:9px 12px;background:#f0fdf4;border:1.5px solid #16a34a;border-radius:8px;margin-top:2px;'><span style='font-size:13px;color:#166534;font-weight:700;'>🛡️ Resilience index</span><span style='font-size:14px;font-weight:700;color:#15803d;'>15–100</span></div>
+</div>""",
+         "viz":"<svg viewBox='0 0 180 230' style='width:100%;max-width:180px;'><rect x='10' y='10' width='160' height='38' rx='8' fill='#dcfce7' stroke='#86efac' stroke-width='1'/><text x='90' y='33' text-anchor='middle' font-size='13' font-weight='700' fill='#15803d' font-family='sans-serif'>🏁 Base: 92</text><rect x='10' y='58' width='158' height='24' rx='5' fill='#fee2e2' class='af' style='animation-delay:.15s;'/><text x='90' y='74' text-anchor='middle' font-size='11' fill='#dc2626' font-family='sans-serif' class='af' style='animation-delay:.15s;'>⚠️ −risk penalty</text><rect x='10' y='86' width='140' height='24' rx='5' fill='#fee2e2' class='af' style='animation-delay:.25s;'/><text x='80' y='102' text-anchor='middle' font-size='11' fill='#dc2626' font-family='sans-serif' class='af' style='animation-delay:.25s;'>🏘️ −social penalty</text><rect x='10' y='114' width='120' height='24' rx='5' fill='#fee2e2' class='af' style='animation-delay:.35s;'/><text x='70' y='130' text-anchor='middle' font-size='11' fill='#dc2626' font-family='sans-serif' class='af' style='animation-delay:.35s;'>⚡ −grid fail ×9</text><rect x='10' y='142' width='100' height='24' rx='5' fill='#fee2e2' class='af' style='animation-delay:.45s;'/><text x='60' y='158' text-anchor='middle' font-size='11' fill='#dc2626' font-family='sans-serif' class='af' style='animation-delay:.45s;'>🌬️ −renew ×5</text><rect x='10' y='170' width='80' height='24' rx='5' fill='#fee2e2' class='af' style='animation-delay:.55s;'/><text x='50' y='186' text-anchor='middle' font-size='11' fill='#dc2626' font-family='sans-serif' class='af' style='animation-delay:.55s;'>🔗 −cascade ×7</text><rect x='10' y='198' width='160' height='26' rx='8' fill='#0f172a' class='ap' style='animation-delay:.7s;'/><text x='90' y='215' text-anchor='middle' font-size='12' font-weight='700' fill='#fff' font-family='sans-serif' class='af' style='animation-delay:.72s;'>🛡️ = Resilience 15–100</text></svg>"},
+        {"e":"💰","t":"Financial loss — 5 components",
+         "body":"""<div style='font-size:13px;color:#475569;line-height:1.7;margin-bottom:12px;'>Five cost components summed then × <b style='color:#f97316;'>📊 scenario multiplier.</b> 💰 VoLL alone is 60–70% of total.</div>
+<div style='display:flex;flex-direction:column;gap:6px;'>
+<div class='ar' style='animation-delay:.05s;display:flex;align-items:center;gap:9px;padding:8px 12px;background:#eff6ff;border-radius:8px;'><span style='font-size:18px;'>⚡</span><span style='flex:1;font-size:11px;color:#1e40af;'>VoLL — ENS_MWh × <b>£17,000</b></span><span style='background:#3b82f6;color:#fff;font-size:11px;font-weight:700;padding:1px 8px;border-radius:10px;'>~65%</span></div>
+<div class='ar' style='animation-delay:.15s;display:flex;align-items:center;gap:9px;padding:8px 12px;background:#f0fdf4;border-radius:8px;'><span style='font-size:18px;'>🏠</span><span style='flex:1;font-size:11px;color:#166534;'>Customer — count × <b>£48</b></span><span style='background:#10b981;color:#fff;font-size:11px;font-weight:700;padding:1px 8px;border-radius:10px;'>~8%</span></div>
+<div class='ar' style='animation-delay:.25s;display:flex;align-items:center;gap:9px;padding:8px 12px;background:#fffbeb;border-radius:8px;'><span style='font-size:18px;'>🏢</span><span style='flex:1;font-size:11px;color:#92400e;'>Business — MWh × £1,100 × density</span><span style='background:#f59e0b;color:#fff;font-size:11px;font-weight:700;padding:1px 8px;border-radius:10px;'>~15%</span></div>
+<div class='ar' style='animation-delay:.35s;display:flex;align-items:center;gap:9px;padding:8px 12px;background:#f5f3ff;border-radius:8px;'><span style='font-size:18px;'>🔧</span><span style='flex:1;font-size:11px;color:#4c1d95;'>Restoration — faults × <b>£18,500</b></span><span style='background:#8b5cf6;color:#fff;font-size:11px;font-weight:700;padding:1px 8px;border-radius:10px;'>~5%</span></div>
+<div class='ar' style='animation-delay:.45s;display:flex;align-items:center;gap:9px;padding:8px 12px;background:#fdf2f8;border-radius:8px;'><span style='font-size:18px;'>🏥</span><span style='flex:1;font-size:11px;color:#831843;'>Critical svcs — MWh × £320 × social_n</span><span style='background:#ec4899;color:#fff;font-size:11px;font-weight:700;padding:1px 8px;border-radius:10px;'>~7%</span></div>
+<div class='ar' style='animation-delay:.6s;display:flex;align-items:center;justify-content:space-between;padding:9px 12px;background:#0f172a;border-radius:8px;margin-top:3px;'><span style='font-size:12px;color:#e2e8f0;font-weight:600;'>📊 × scenario multiplier</span><span style='font-size:11px;color:#94a3b8;'>1.0× → 4.2×</span></div>
+</div>""",
+         "viz":"<svg viewBox='0 0 180 240' style='width:100%;max-width:180px;'><text x='90' y='18' text-anchor='middle' font-size='12' font-weight='600' fill='#64748b' font-family='sans-serif'>💰 Live baseline</text><text x='90' y='46' text-anchor='middle' font-size='30' font-weight='700' fill='#0f172a' font-family='sans-serif' class='ap' style='animation-delay:.1s;'>£183m</text><rect x='10' y='62' width='160' height='20' rx='4' fill='#3b82f6' class='af' style='animation-delay:.2s;'/><text x='90' y='76' text-anchor='middle' font-size='10' fill='#fff' font-family='sans-serif' class='af' style='animation-delay:.2s;'>⚡ VoLL ~£119m</text><rect x='10' y='86' width='50' height='18' rx='4' fill='#10b981' class='af' style='animation-delay:.3s;'/><text x='35' y='99' text-anchor='middle' font-size='9' fill='#fff' font-family='sans-serif' class='af' style='animation-delay:.3s;'>🏠 Cust</text><rect x='64' y='86' width='96' height='18' rx='4' fill='#f59e0b' class='af' style='animation-delay:.4s;'/><text x='112' y='99' text-anchor='middle' font-size='9' fill='#fff' font-family='sans-serif' class='af' style='animation-delay:.4s;'>🏢 Business ~£27m</text><rect x='10' y='108' width='30' height='18' rx='4' fill='#8b5cf6' class='af' style='animation-delay:.5s;'/><text x='25' y='121' text-anchor='middle' font-size='8' fill='#fff' font-family='sans-serif' class='af' style='animation-delay:.5s;'>🔧</text><rect x='44' y='108' width='40' height='18' rx='4' fill='#ec4899' class='af' style='animation-delay:.6s;'/><text x='64' y='121' text-anchor='middle' font-size='8' fill='#fff' font-family='sans-serif' class='af' style='animation-delay:.6s;'>🏥 Crit</text><line x1='90' y1='132' x2='90' y2='150' stroke='#0f172a' stroke-width='1.5' class='al' style='animation-delay:.7s;stroke-dasharray:25;stroke-dashoffset:25;'/><rect x='10' y='152' width='160' height='28' rx='7' fill='#0f172a' class='ap' style='animation-delay:.8s;'/><text x='90' y='170' text-anchor='middle' font-size='11' font-weight='700' fill='#fff' font-family='sans-serif' class='af' style='animation-delay:.82s;'>× scenario multiplier</text><rect x='10' y='188' width='44' height='22' rx='5' fill='#16a34a' class='ap' style='animation-delay:.9s;'/><text x='32' y='203' text-anchor='middle' font-size='9' fill='#fff' font-family='sans-serif'>1.0× 🌤️</text><rect x='60' y='188' width='44' height='22' rx='5' fill='#f97316' class='ap' style='animation-delay:1s;'/><text x='82' y='203' text-anchor='middle' font-size='9' fill='#fff' font-family='sans-serif'>2.4× 🌊</text><rect x='110' y='188' width='60' height='22' rx='5' fill='#dc2626' class='ap' style='animation-delay:1.1s;'/><text x='140' y='203' text-anchor='middle' font-size='9' fill='#fff' font-family='sans-serif'>4.2× 🌑</text></svg>"},
+    ]
+},
 
-    "simulation": [
-        {"title": "Canvas layer 1 — backdrop",
-         "color": "#1565c0",
-         "formula": "ctx.fillStyle = gradient(darkBlue→deepNavy); drawGrid(spacing=40, alpha=0.08)",
-         "explain": "The bottom layer draws the dark atmospheric background and a faint grid. This never changes — it is drawn once at initialisation and sits below all weather layers."},
-        {"title": "Canvas layer 2 — pressure contours",
-         "color": "#4a90d9",
-         "formula": "for each centre: drawIsobar(cx, cy, radius=base+sin(t×0.4)×20)",
-         "explain": "Two pressure centres (low and high) pulse gently using sin(time) to simulate real atmospheric oscillation. In storm mode the low-pressure centre dominates and its isobars tighten — indicating strong pressure gradients."},
-        {"title": "Canvas layer 3 — precipitation",
-         "color": "#1D9E75",
-         "formula": "rain_bands × 55, cloud_patches × 28, vortices × 3  (storm mode)",
-         "explain": "Rain bands are drawn as semi-transparent arcs. Cloud patches are ellipses with low opacity. Vortices rotate around the low-pressure centre. In calm mode: 8 bands, 6 clouds. Storm mode activates 55 bands, 28 clouds and 3 vortices."},
-        {"title": "Canvas layer 4 — frontal boundaries",
-         "color": "#ce93d8",
-         "formula": "warm_front: red dashed curve; cold_front: blue solid with triangles; dt-animated",
-         "explain": "Frontal boundaries are animated forward in time using dt (delta-time). The warm front is a dashed red curve, the cold front a solid blue line with small triangle symbols — matching BBC/Met Office weather map conventions."},
-        {"title": "Canvas layer 5 — wind vectors",
-         "color": "#fff59d",
-         "formula": "for each arrow: x += speed×cos(dir)×dt; y += speed×sin(dir)×dt; wrap()",
-         "explain": "155 wind arrows (storm mode) are particles that drift in the wind direction and wrap around the canvas edges. Arrow length scales with wind speed. In calm mode only 22 arrows appear."},
-        {"title": "Canvas layer 6 — city labels + stats bar",
-         "color": "#aee2ff",
-         "formula": "DOM overlay: position:absolute; stats update every frame via innerHTML",
-         "explain": "City labels are HTML <div> elements positioned absolutely over the canvas — not drawn on the canvas itself — so they stay crisp at any resolution. The stats bar updates every animation frame with live risk/resilience values."},
-    ],
+"hazards": {
+    "title": "Natural hazard resilience model",
+    "steps": [
+        {"e":"🌪️","t":"5 hazard types scored separately",
+         "body":"""<div style='font-size:13px;color:#475569;line-height:1.7;margin-bottom:12px;'>Each hazard gets its own stress score and resilience index — different hazards need different engineering responses.</div>
+<div style='display:flex;flex-direction:column;gap:7px;'>
+<div class='ar' style='animation-delay:.05s;display:flex;align-items:center;gap:10px;padding:9px 13px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:9px;'><span style='font-size:22px;'>💨</span><span style='flex:1;font-size:12px;color:#1d4ed8;font-weight:500;'>Wind storm</span><span style='font-size:11px;color:#64748b;'>driver: wind_speed · 25–55 km/h</span></div>
+<div class='ar' style='animation-delay:.15s;display:flex;align-items:center;gap:10px;padding:9px 13px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:9px;'><span style='font-size:22px;'>🌊</span><span style='flex:1;font-size:12px;color:#166534;font-weight:500;'>Flood / heavy rain</span><span style='font-size:11px;color:#64748b;'>driver: precip · 1.5–8 mm/h</span></div>
+<div class='ar' style='animation-delay:.25s;display:flex;align-items:center;gap:10px;padding:9px 13px;background:#fffbeb;border:1px solid #fde68a;border-radius:9px;'><span style='font-size:22px;'>🏜️</span><span style='flex:1;font-size:12px;color:#92400e;font-weight:500;'>Drought / low renewable</span><span style='font-size:11px;color:#64748b;'>driver: renew_fail · 0.35–0.75</span></div>
+<div class='ar' style='animation-delay:.35s;display:flex;align-items:center;gap:10px;padding:9px 13px;background:#fff7ed;border:1px solid #fed7aa;border-radius:9px;'><span style='font-size:22px;'>🌡️</span><span style='flex:1;font-size:12px;color:#9a3412;font-weight:500;'>Heat / air quality</span><span style='font-size:11px;color:#64748b;'>driver: AQI · 35–95</span></div>
+<div class='ar' style='animation-delay:.45s;display:flex;align-items:center;gap:10px;padding:9px 13px;background:#f5f3ff;border:1px solid #c4b5fd;border-radius:9px;'><span style='font-size:22px;'>🌀</span><span style='flex:1;font-size:12px;color:#4c1d95;font-weight:500;'>Compound hazard</span><span style='font-size:11px;color:#64748b;'>driver: wind+rain+AQI+outages</span></div>
+</div>""",
+         "viz":"<svg viewBox='0 0 180 240' style='width:100%;max-width:180px;'><text x='90' y='18' text-anchor='middle' font-size='11' font-weight='600' fill='#64748b' font-family='sans-serif'>Stressor formula</text><rect x='10' y='28' width='160' height='36' rx='7' fill='#f5f3ff' stroke='#c4b5fd' stroke-width='1'/><text x='90' y='44' text-anchor='middle' font-size='10' fill='#6d28d9' font-family='monospace' class='af' style='animation-delay:.1s;'>stress = clip(</text><text x='90' y='57' text-anchor='middle' font-size='10' fill='#6d28d9' font-family='monospace' class='af' style='animation-delay:.1s;'>(val−lo)/(hi−lo)×100, 0,100)</text><rect x='10' y='74' width='160' height='30' rx='7' fill='#eff6ff' stroke='#bfdbfe' stroke-width='1' class='ap' style='animation-delay:.3s;'/><text x='90' y='93' text-anchor='middle' font-size='11' fill='#185FA5' font-family='sans-serif' class='af' style='animation-delay:.32s;'>💨 Wind: lo=25, hi=55 km/h</text><rect x='10' y='110' width='160' height='30' rx='7' fill='#f0fdf4' stroke='#bbf7d0' stroke-width='1' class='ap' style='animation-delay:.45s;'/><text x='90' y='129' text-anchor='middle' font-size='11' fill='#166534' font-family='sans-serif' class='af' style='animation-delay:.47s;'>🌊 Flood: lo=1.5, hi=8 mm/h</text><rect x='10' y='146' width='160' height='30' rx='7' fill='#fff7ed' stroke='#fed7aa' stroke-width='1' class='ap' style='animation-delay:.6s;'/><text x='90' y='165' text-anchor='middle' font-size='11' fill='#9a3412' font-family='sans-serif' class='af' style='animation-delay:.62s;'>🌡️ Heat: lo=35, hi=95 AQI</text><rect x='10' y='182' width='160' height='30' rx='7' fill='#f0fdf4' stroke='#86efac' stroke-width='1.5' class='ap' style='animation-delay:.75s;'/><text x='90' y='201' text-anchor='middle' font-size='11' fill='#166534' font-weight='600' font-family='sans-serif' class='af' style='animation-delay:.77s;'>🛡️ Base=88, calm floor=68</text></svg>"},
+        {"e":"⚖️","t":"Penalty formula per hazard",
+         "body":"""<div style='font-size:13px;color:#475569;line-height:1.7;margin-bottom:12px;'>Each hazard applies a penalty to base score 88. Calm weather reduces penalties by 75%.</div>
+<div class='af' style='animation-delay:.1s;background:#f5f3ff;border:1px solid #c4b5fd;border-radius:10px;padding:11px 14px;margin-bottom:10px;'><div style='font-size:10px;color:#5b21b6;font-weight:700;text-transform:uppercase;margin-bottom:5px;'>🔢 Penalty structure</div><div style='font-size:11px;color:#6d28d9;font-family:monospace;line-height:1.8;'>score = 88<br>− wf × stress_n × 18  (🌪️ hazard)<br>− social_n × 6  (🏘️ deprivation)<br>− outage_n × 7  (🔴 faults)<br>− ens_n × 5  (📉 ENS)<br>− fail × 7  (⚡ grid fail)<br>wf = 0.25 if calm, else 1.0</div></div>
+<div style='display:grid;grid-template-columns:1fr 1fr;gap:8px;'>
+<div class='ap' style='animation-delay:.5s;background:#dcfce7;border:1px solid #86efac;border-radius:9px;padding:10px;text-align:center;'><div style='font-size:18px;'>💪</div><div style='font-size:17px;font-weight:700;color:#15803d;'>≥80</div><div style='font-size:10px;color:#166534;'>Robust</div></div>
+<div class='ap' style='animation-delay:.6s;background:#dbeafe;border:1px solid #93c5fd;border-radius:9px;padding:10px;text-align:center;'><div style='font-size:18px;'>🔵</div><div style='font-size:17px;font-weight:700;color:#1d4ed8;'>65–79</div><div style='font-size:10px;color:#1e40af;'>Stable</div></div>
+<div class='ap' style='animation-delay:.7s;background:#fef9c3;border:1px solid #fde047;border-radius:9px;padding:10px;text-align:center;'><div style='font-size:18px;'>⚠️</div><div style='font-size:17px;font-weight:700;color:#a16207;'>45–64</div><div style='font-size:10px;color:#92400e;'>Stressed</div></div>
+<div class='ap' style='animation-delay:.8s;background:#fee2e2;border:1px solid #fca5a5;border-radius:9px;padding:10px;text-align:center;'><div style='font-size:18px;'>🚨</div><div style='font-size:17px;font-weight:700;color:#dc2626;'>&lt;45</div><div style='font-size:10px;color:#991b1b;'>Fragile</div></div>
+</div>""",
+         "viz":"<svg viewBox='0 0 180 200' style='width:100%;max-width:180px;'><rect x='20' y='10' width='140' height='32' rx='8' fill='#dcfce7' stroke='#86efac' stroke-width='1'/><text x='90' y='30' text-anchor='middle' font-size='14' font-weight='700' fill='#15803d' font-family='sans-serif'>🏁 Base: 88</text><rect x='20' y='50' width='120' height='22' rx='5' fill='#fee2e2' class='af' style='animation-delay:.1s;'/><text x='80' y='65' text-anchor='middle' font-size='10' fill='#dc2626' font-family='sans-serif' class='af' style='animation-delay:.1s;'>🌪️ − hazard × 18</text><rect x='20' y='76' width='100' height='22' rx='5' fill='#fee2e2' class='af' style='animation-delay:.2s;'/><text x='70' y='91' text-anchor='middle' font-size='10' fill='#dc2626' font-family='sans-serif' class='af' style='animation-delay:.2s;'>🏘️ − social × 6</text><rect x='20' y='102' width='80' height='22' rx='5' fill='#fee2e2' class='af' style='animation-delay:.3s;'/><text x='60' y='117' text-anchor='middle' font-size='10' fill='#dc2626' font-family='sans-serif' class='af' style='animation-delay:.3s;'>🔴 − outage × 7</text><rect x='20' y='128' width='60' height='22' rx='5' fill='#fee2e2' class='af' style='animation-delay:.4s;'/><text x='50' y='143' text-anchor='middle' font-size='10' fill='#dc2626' font-family='sans-serif' class='af' style='animation-delay:.4s;'>⚡ − fail × 7</text><rect x='20' y='158' width='140' height='28' rx='8' fill='#0f172a' class='ap' style='animation-delay:.55s;'/><text x='90' y='176' text-anchor='middle' font-size='12' font-weight='700' fill='#fff' font-family='sans-serif' class='af' style='animation-delay:.57s;'>🛡️ = Resilience 15–100</text></svg>"},
+    ]
+},
 
-    "hazards": [
-        {"title": "Hazard stressor score",
-         "color": "#1D9E75",
-         "formula": "stress = clip((driver − threshold_low) / (threshold_high − threshold_low) × 100, 0, 100)",
-         "explain": "Each hazard type converts its raw meteorological driver into a 0–100 stress score using linear interpolation between two calibrated thresholds. Below the lower threshold: 0 stress. Above the upper threshold: 100 stress. Between them: proportional."},
-        {"title": "Wind storm stressor",
-         "color": "#378ADD",
-         "formula": "wind_stress = clip((wind_kmh − 25) / (55 − 25) × 100, 0, 100)",
-         "explain": "Wind stress is zero below 25 km/h (normal UK conditions). It reaches 100 at 55 km/h (severe storm). The 25–55 km/h range covers gale-force winds that damage overhead lines and restrict crew vehicle access."},
-        {"title": "Hazard resilience penalty",
-         "color": "#e67e22",
-         "formula": "score = 88 − weather_factor×stress_n×18 − social_n×6 − outage_n×7 − ens_n×5 − fail×7 − finance_n×4 − risk_n×6",
-         "explain": "Base score is 88 (UK grids are very reliable). Penalties are subtracted for each stress factor. The largest single penalty is hazard stress (up to 18 pts). Social vulnerability adds up to 6 pts because deprived areas have less capacity to cope. Clipped to range 15–100."},
-        {"title": "Calm-weather adjustment",
-         "color": "#27ae60",
-         "formula": "if calm: weather_factor = 0.25 (not 1.0); floor = max(score, 68)",
-         "explain": "In calm live conditions, the weather stress penalty is reduced to 25% of its full value, and the score cannot fall below 68. This prevents the hazard resilience showing 'Stressed' on a clear spring day — consistent with the UK's typically high infrastructure reliability."},
-        {"title": "Classification bands",
-         "color": "#7F77DD",
-         "formula": "≥80 → Robust  |  ≥65 → Stable  |  ≥45 → Stressed  |  <45 → Fragile",
-         "explain": "Each band has an operational meaning. Robust (80+): no action needed. Stable (65–79): routine monitoring. Stressed (45–64): investigation and medium-term investment plan required. Fragile (<45): urgent engineering intervention. Under live calm conditions most areas sit in Stable or Robust."},
-    ],
+"iod": {
+    "title": "IoD2025 socio-economic data",
+    "steps": [
+        {"e":"📂","t":"Loading IoD2025 Excel files",
+         "body":"""<div style='font-size:13px;color:#475569;line-height:1.7;margin-bottom:12px;'>The system automatically scans 15 filesystem paths for IoD2025 Excel files from DLUHC (UK government). 296 LAD rows loaded.</div>
+<div class='af' style='animation-delay:.1s;background:#fbeaf0;border:1px solid #f4c0d1;border-radius:10px;padding:11px 14px;margin-bottom:10px;'><div style='font-size:10px;color:#881337;font-weight:700;text-transform:uppercase;margin-bottom:5px;'>📂 File scanner</div><div style='font-size:11px;color:#9f1239;font-family:monospace;line-height:1.8;'>search: data/iod2025/File_1*.xlsx<br>search: data/iod2025/IoD*2025*.xlsx<br>15 paths checked automatically<br>→ 296 LAD rows extracted</div></div>
+<div style='display:flex;flex-direction:column;gap:7px;'>
+<div class='ar' style='animation-delay:.3s;background:#fdf2f8;border:1px solid #f0abfc;border-radius:9px;padding:9px 13px;display:flex;align-items:center;gap:10px;'><span style='font-size:20px;'>📊</span><span style='flex:1;font-size:12px;color:#7e22ce;font-weight:500;'>9 deprivation domain scores per LAD</span></div>
+<div class='ar' style='animation-delay:.45s;background:#fdf2f8;border:1px solid #f0abfc;border-radius:9px;padding:9px 13px;display:flex;align-items:center;gap:10px;'><span style='font-size:20px;'>🏘️</span><span style='flex:1;font-size:12px;color:#7e22ce;font-weight:500;'>Income, employment, health, education...</span></div>
+<div class='ar' style='animation-delay:.6s;background:#dcfce7;border:1px solid #86efac;border-radius:9px;padding:9px 13px;display:flex;align-items:center;gap:10px;'><span style='font-size:20px;'>✅</span><span style='flex:1;font-size:12px;color:#166534;font-weight:500;'>All 6 cities matched — exact LAD</span></div>
+</div>""",
+         "viz":"<svg viewBox='0 0 180 200' style='width:100%;max-width:180px;'><text x='90' y='16' text-anchor='middle' font-size='11' font-weight='600' fill='#64748b' font-family='sans-serif'>4-level matching</text><rect x='10' y='24' width='160' height='28' rx='7' fill='#fbeaf0' stroke='#f4c0d1' stroke-width='1' class='ap' style='animation-delay:.1s;'/><text x='90' y='42' text-anchor='middle' font-size='11' fill='#881337' font-family='sans-serif' class='af' style='animation-delay:.12s;'>1️⃣ Exact LAD name</text><line x1='90' y1='52' x2='90' y2='64' stroke='#16a34a' stroke-width='1.5' class='al' style='animation-delay:.3s;stroke-dasharray:20;stroke-dashoffset:20;'/><rect x='10' y='66' width='160' height='28' rx='7' fill='#fdf2f8' stroke='#f0abfc' stroke-width='1' class='ap' style='animation-delay:.4s;'/><text x='90' y='84' text-anchor='middle' font-size='11' fill='#7e22ce' font-family='sans-serif' class='af' style='animation-delay:.42s;'>2️⃣ Partial token match</text><line x1='90' y1='94' x2='90' y2='106' stroke='#94a3b8' stroke-width='1.5' class='al' style='animation-delay:.55s;stroke-dasharray:20;stroke-dashoffset:20;'/><rect x='10' y='108' width='160' height='28' rx='7' fill='#f0fdf4' stroke='#bbf7d0' stroke-width='1' class='ap' style='animation-delay:.65s;'/><text x='90' y='126' text-anchor='middle' font-size='11' fill='#166534' font-family='sans-serif' class='af' style='animation-delay:.67s;'>3️⃣ Regional aggregate</text><line x1='90' y1='136' x2='90' y2='148' stroke='#94a3b8' stroke-width='1.5' class='al' style='animation-delay:.8s;stroke-dasharray:20;stroke-dashoffset:20;'/><rect x='10' y='150' width='160' height='28' rx='7' fill='#fffbeb' stroke='#fde68a' stroke-width='1' class='ap' style='animation-delay:.9s;'/><text x='90' y='168' text-anchor='middle' font-size='11' fill='#92400e' font-family='sans-serif' class='af' style='animation-delay:.92s;'>4️⃣ Fallback proxy</text></svg>"},
+        {"e":"🧬","t":"9 domain composite + blending",
+         "body":"""<div style='font-size:13px;color:#475569;line-height:1.7;margin-bottom:12px;'>9 domains are averaged into a composite. Then blended 70/30 with the fallback formula.</div>
+<div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:12px;'>
+<div class='ap' style='animation-delay:.05s;background:#fdf2f8;border:1px solid #f0abfc;border-radius:8px;padding:7px;text-align:center;font-size:11px;color:#7e22ce;'>💷 Income</div>
+<div class='ap' style='animation-delay:.1s;background:#fdf2f8;border:1px solid #f0abfc;border-radius:8px;padding:7px;text-align:center;font-size:11px;color:#7e22ce;'>💼 Employment</div>
+<div class='ap' style='animation-delay:.15s;background:#fdf2f8;border:1px solid #f0abfc;border-radius:8px;padding:7px;text-align:center;font-size:11px;color:#7e22ce;'>🏥 Health</div>
+<div class='ap' style='animation-delay:.2s;background:#fdf2f8;border:1px solid #f0abfc;border-radius:8px;padding:7px;text-align:center;font-size:11px;color:#7e22ce;'>📚 Education</div>
+<div class='ap' style='animation-delay:.25s;background:#fdf2f8;border:1px solid #f0abfc;border-radius:8px;padding:7px;text-align:center;font-size:11px;color:#7e22ce;'>🚔 Crime</div>
+<div class='ap' style='animation-delay:.3s;background:#fdf2f8;border:1px solid #f0abfc;border-radius:8px;padding:7px;text-align:center;font-size:11px;color:#7e22ce;'>🏠 Housing</div>
+<div class='ap' style='animation-delay:.35s;background:#fdf2f8;border:1px solid #f0abfc;border-radius:8px;padding:7px;text-align:center;font-size:11px;color:#7e22ce;'>🌿 Living env</div>
+<div class='ap' style='animation-delay:.4s;background:#fdf2f8;border:1px solid #f0abfc;border-radius:8px;padding:7px;text-align:center;font-size:11px;color:#7e22ce;'>👶 IDACI</div>
+<div class='ap' style='animation-delay:.45s;background:#fdf2f8;border:1px solid #f0abfc;border-radius:8px;padding:7px;text-align:center;font-size:11px;color:#7e22ce;'>👴 IDAOPI</div>
+</div>
+<div class='af' style='animation-delay:.6s;background:#e0f2fe;border:1px solid #7dd3fc;border-radius:9px;padding:10px 13px;'><div style='font-size:10px;color:#0369a1;font-weight:700;text-transform:uppercase;margin-bottom:4px;'>⚗️ Blend formula</div><div style='font-size:11px;color:#0284c7;font-family:monospace;'>social = 0.70 × IoD2025_composite<br>       + 0.30 × fallback</div></div>
+<div class='af' style='animation-delay:.75s;background:#fefce8;border:1px solid #fde047;border-radius:8px;padding:8px 12px;margin-top:8px;font-size:11px;color:#92400e;'>⚠️ IMD higher = MORE deprived (rank inverted)</div>""",
+         "viz":"<svg viewBox='0 0 180 170' style='width:100%;max-width:180px;'><text x='90' y='16' text-anchor='middle' font-size='11' font-weight='600' fill='#64748b' font-family='sans-serif'>Newcastle ≈ 44/100</text><rect x='10' y='26' width='160' height='20' rx='4' fill='#e2e8f0'/><rect x='10' y='26' width='70' height='20' rx='4' fill='#d946ef' class='af' style='animation-delay:.6s;'/><text x='90' y='40' text-anchor='middle' font-size='10' fill='#64748b' font-family='sans-serif'>IoD composite</text><rect x='10' y='54' width='160' height='20' rx='4' fill='#e2e8f0'/><rect x='10' y='54' width='48' height='20' rx='4' fill='#60a5fa' class='af' style='animation-delay:.75s;'/><text x='90' y='68' text-anchor='middle' font-size='10' fill='#64748b' font-family='sans-serif'>Fallback (density+IMD)</text><line x1='90' y1='80' x2='90' y2='100' stroke='#0369a1' stroke-width='1.5' class='al' style='animation-delay:.9s;stroke-dasharray:25;stroke-dashoffset:25;'/><rect x='20' y='102' width='140' height='36' rx='9' fill='#0f172a' class='ap' style='animation-delay:1s;'/><text x='90' y='117' text-anchor='middle' font-size='10' font-weight='600' fill='#e2e8f0' font-family='sans-serif' class='af' style='animation-delay:1.02s;'>🏘️ Social vulnerability</text><text x='90' y='130' text-anchor='middle' font-size='14' font-weight='700' fill='#fff' font-family='sans-serif' class='af' style='animation-delay:1.05s;'>40.2 / 100</text><text x='90' y='158' text-anchor='middle' font-size='10' fill='#94a3b8' font-family='sans-serif'>0=least deprived · 100=most</text></svg>"},
+    ]
+},
 
-    "iod": [
-        {"title": "Step 1 — IoD2025 Excel loading",
-         "color": "#D4537E",
-         "formula": "scanner searches 15 filesystem paths for files matching 'IoD*2025*.xlsx' or 'File_1*.xlsx'",
-         "explain": "The system automatically searches common data directory paths for IoD2025 Excel files from DLUHC (Department for Levelling Up, Housing and Communities). It reads all sheets and extracts the LAD (Local Authority District) name and 9 domain scores. 296 rows loaded for North East England."},
-        {"title": "Step 2 — 4-level LAD matching",
-         "color": "#993556",
-         "formula": "1. Exact name  →  2. Token subset  →  3. Regional aggregate  →  4. Fallback proxy",
-         "explain": "Each configured city is matched to IoD2025 data through a hierarchy. First: exact LAD name match ('Newcastle upon Tyne'). If that fails: partial token match ('newcastle'). If that fails: average of all LADs in the same region. Last resort: population-density and vulnerability proxy formula. All 6 cities achieved exact matches."},
-        {"title": "Step 3 — 9 domain composite",
-         "color": "#7F77DD",
-         "formula": "IoD_composite = mean(income, employment, health, education, crime, housing, living, IDACI, IDAOPI)",
-         "explain": "The 9 IoD2025 domains are averaged into a single composite score (0–100). Each domain measures a different aspect of deprivation. IDACI measures child poverty, IDAOPI measures older-person poverty. Newcastle upon Tyne composite ≈ 44/100 — moderate deprivation."},
-        {"title": "Step 4 — Social vulnerability blend",
-         "color": "#185FA5",
-         "formula": "social = 0.70 × IoD_composite + 0.30 × (0.40×density_n×100 + 0.60×IMD_score)",
-         "explain": "When IoD2025 data is matched, it contributes 70% of the social vulnerability score. The remaining 30% comes from the fallback formula using population density and IMD rank. This blend ensures IoD2025 data dominates while population density provides spatial granularity."},
-        {"title": "Step 5 — IMD direction (important!)",
-         "color": "#e67e22",
-         "formula": "IMD_score = 100 × (1 − rank/total_LADs)  →  higher score = MORE deprived",
-         "explain": "IMD ranks are INVERTED: rank 1 (most deprived) becomes score 100, rank N (least deprived) becomes score 0. This is counter-intuitive but essential — a high social vulnerability score means MORE vulnerable, which increases financial loss and resilience penalties. Newcastle ≈ 44/100 means moderately deprived."},
-    ],
+"failure": {
+    "title": "Failure probability + investment model",
+    "steps": [
+        {"e":"🔮","t":"Logistic z-score model",
+         "body":"""<div style='font-size:13px;color:#475569;line-height:1.7;margin-bottom:12px;'>Nine inputs combine into a z-score. Intercept −4.45 calibrated so UK avg → z≈−4.2 → prob≈1.5%.</div>
+<div class='af' style='animation-delay:.1s;background:#f5f3ff;border:1px solid #c4b5fd;border-radius:10px;padding:11px 14px;margin-bottom:10px;'><div style='font-size:10px;color:#5b21b6;font-weight:700;text-transform:uppercase;margin-bottom:5px;'>🔢 Z-score</div><div style='font-size:11px;color:#6d28d9;font-family:monospace;line-height:1.8;'>z = −4.45 (intercept)<br>+ 1.05 × base_failure<br>+ 0.95 × grid_failure<br>+ 0.55 × renewable_fail<br>+ 0.45 × social_n<br>+ 0.38 × outage_n<br>+ 0.28 × ens_n<br>+ 0.25 × risk_n</div></div>
+<div class='af' style='animation-delay:.4s;background:#fdf2f8;border:1px solid #f0abfc;border-radius:9px;padding:9px 13px;'><span style='font-size:18px;'>🔮</span> <span style='font-size:11px;color:#7e22ce;font-family:monospace;'>prob = 1 / (1 + exp(−z))</span></div>
+<div class='af' style='animation-delay:.55s;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:8px 12px;margin-top:8px;font-size:11px;color:#166534;'>🛡️ Calm guard: prob × 0.35, max 18%</div>""",
+         "viz":"<svg viewBox='0 0 180 200' style='width:100%;max-width:180px;'><polyline fill='none' stroke='#e2e8f0' stroke-width='1' points='18,170 162,170 18,170 18,30'/><polyline fill='none' stroke='#8b5cf6' stroke-width='2.5' stroke-linecap='round' points='18,168 33,166 48,162 63,155 78,142 93,124 108,106 123,90 138,78 153,70 162,66' style='stroke-dasharray:400;stroke-dashoffset:400;animation:drawL .8s .2s ease forwards;'/><circle cx='105' cy='108' r='5' fill='#8b5cf6' class='ap' style='animation-delay:1.1s;'/><text x='114' y='105' font-size='9' fill='#7c3aed' font-family='sans-serif' class='af' style='animation-delay:1.1s;'>50% at risk=58</text><circle cx='34' cy='167' r='4' fill='#10b981' class='ap' style='animation-delay:1.3s;'/><text x='40' y='163' font-size='9' fill='#059669' font-family='sans-serif' class='af' style='animation-delay:1.3s;'>~1% 🌤️</text><text x='18' y='178' font-size='9' fill='#94a3b8' font-family='sans-serif'>0</text><text x='155' y='178' font-size='9' fill='#94a3b8' font-family='sans-serif'>100</text><text x='100' y='192' text-anchor='middle' font-size='10' fill='#64748b' font-family='sans-serif'>🔮 Failure probability</text></svg>"},
+        {"e":"🎯","t":"Recommendation score + priority bands",
+         "body":"""<div style='font-size:13px;color:#475569;line-height:1.7;margin-bottom:12px;'>Recommendation score drives investment priority. Under calm live conditions most areas score &lt;35 (Monitor).</div>
+<div class='af' style='animation-delay:.1s;background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:11px 14px;margin-bottom:10px;'><div style='font-size:10px;color:#a16207;font-weight:700;text-transform:uppercase;margin-bottom:5px;'>🎯 Score formula</div><div style='font-size:11px;color:#92400e;font-family:monospace;line-height:1.8;'>score = 0.30×risk + 0.22×social<br>+ 0.18×(100−resilience)<br>+ 0.13×loss_n + 0.10×ENS_n<br>+ 0.07×outage_n</div></div>
+<div style='display:flex;flex-direction:column;gap:6px;'>
+<div class='ar' style='animation-delay:.3s;display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#fee2e2;border-radius:8px;'><span style='font-size:13px;'>🚨 Priority 1</span><span style='font-size:12px;font-weight:700;color:#dc2626;'>score ≥ 75</span></div>
+<div class='ar' style='animation-delay:.4s;display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#fff7ed;border-radius:8px;'><span style='font-size:13px;'>🟠 Priority 2</span><span style='font-size:12px;font-weight:700;color:#f97316;'>score 55–74</span></div>
+<div class='ar' style='animation-delay:.5s;display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#fefce8;border-radius:8px;'><span style='font-size:13px;'>🟡 Priority 3</span><span style='font-size:12px;font-weight:700;color:#ca8a04;'>score 35–54</span></div>
+<div class='ar' style='animation-delay:.6s;display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#dcfce7;border-radius:8px;'><span style='font-size:13px;'>🟢 Monitor</span><span style='font-size:12px;font-weight:700;color:#16a34a;'>score &lt; 35</span></div>
+</div>
+<div class='af' style='animation-delay:.75s;background:#e0f2fe;border:1px solid #7dd3fc;border-radius:8px;padding:8px 12px;margin-top:8px;font-size:11px;color:#0369a1;'>💡 Cost: £120k + score×£8,500 + outages×£35k + ENS×£260</div>""",
+         "viz":"<svg viewBox='0 0 180 200' style='width:100%;max-width:180px;'><text x='90' y='16' text-anchor='middle' font-size='11' font-weight='600' fill='#64748b' font-family='sans-serif'>Priority threshold</text><rect x='10' y='24' width='160' height='12' rx='2' fill='#e2e8f0'/><rect x='10' y='24' width='160' height='12' rx='2' fill='url(#pg2)' class='af' style='animation-delay:.3s;'/><defs><linearGradient id='pg2' x1='0' y1='0' x2='1' y2='0'><stop offset='0%' stop-color='#22c55e'/><stop offset='35%' stop-color='#eab308'/><stop offset='55%' stop-color='#f97316'/><stop offset='75%' stop-color='#ef4444'/></linearGradient></defs><text x='10' y='52' font-size='9' fill='#94a3b8' font-family='sans-serif'>0</text><text x='52' y='52' text-anchor='middle' font-size='9' fill='#94a3b8' font-family='sans-serif'>35</text><text x='94' y='52' text-anchor='middle' font-size='9' fill='#94a3b8' font-family='sans-serif'>55</text><text x='126' y='52' text-anchor='middle' font-size='9' fill='#94a3b8' font-family='sans-serif'>75</text><text x='166' y='52' text-anchor='middle' font-size='9' fill='#94a3b8' font-family='sans-serif'>100</text><rect x='10' y='62' width='160' height='28' rx='7' fill='#f8fafc' stroke='#e2e8f0' stroke-width='1' class='af' style='animation-delay:.4s;'/><text x='90' y='80' text-anchor='middle' font-size='11' fill='#475569' font-family='sans-serif' class='af' style='animation-delay:.42s;'>🌤️ Calm live: score ≈ 22–38</text><line x1='38' y1='58' x2='38' y2='62' stroke='#16a34a' stroke-width='1.5' class='al' style='animation-delay:.5s;stroke-dasharray:10;stroke-dashoffset:10;'/><rect x='10' y='102' width='160' height='26' rx='7' fill='#f0fdf4' stroke='#86efac' stroke-width='1' class='ap' style='animation-delay:.55s;'/><text x='90' y='119' text-anchor='middle' font-size='11' fill='#166534' font-family='sans-serif' class='af' style='animation-delay:.57s;'>🟢 → Monitor band</text><rect x='10' y='138' width='160' height='26' rx='7' fill='#fefce8' stroke='#fde047' stroke-width='1' class='ap' style='animation-delay:.7s;'/><text x='90' y='155' text-anchor='middle' font-size='11' fill='#92400e' font-family='sans-serif' class='af' style='animation-delay:.72s;'>⛈️ Storm → Priority 1 activates</text><text x='90' y='192' text-anchor='middle' font-size='10' fill='#94a3b8' font-family='sans-serif'>Programme total ≈ £49m</text></svg>"},
+    ]
+},
 
-    "map": [
-        {"title": "Step 1 — Fetch real boundary GeoJSON",
-         "color": "#1565c0",
-         "formula": "GET https://raw.githubusercontent.com/missinglink/uk-postcode-polygons/master/geojson/{area}.geojson",
-         "explain": "Real UK postcode district boundary polygons are fetched from missinglink/uk-postcode-polygons (public domain, GitHub). Each area code (NE, SR, DH, TS, DL for North East) returns a GeoJSON FeatureCollection with one feature per district. NE area alone has 59 districts (NE1–NE46). Cached for 24 hours."},
-        {"title": "Step 2 — Centroid calculation",
-         "color": "#378ADD",
-         "formula": "cx = mean([c[0] for c in ring]);  cy = mean([c[1] for c in ring])",
-         "explain": "For each postcode district polygon, the centroid is calculated as the arithmetic mean of all coordinate pairs in the outer ring. This is a fast approximation (not the true geometric centroid) but accurate enough for IDW interpolation at this scale."},
-        {"title": "Step 3 — IDW risk interpolation",
-         "color": "#7F77DD",
-         "formula": "risk = Σ(place_risk / dist²) / Σ(1 / dist²)     [min dist: 0.5 km]",
-         "explain": "Inverse-Distance Weighted interpolation assigns a risk score to each district centroid based on the 6 configured places. Closer places have proportionally more influence (distance squared weighting). The 0.5 km minimum prevents division-by-zero for centroids very close to a place location."},
-        {"title": "Step 4 — Continuous pastel gradient",
-         "color": "#BA7517",
-         "formula": "colour = interpolate(stops, risk/100)  →  8-stop gradient: blue→green→yellow→orange→pink→purple",
-         "explain": "The interpolated risk score (0–100) is mapped to a position on an 8-stop pastel colour gradient. Intermediate values produce unique blended colours. This gives 39 distinct colour tones across the 59 NE districts — matching the visual richness of a professional UK postcode atlas map."},
-        {"title": "Step 5 — Render choropleth",
-         "color": "#27ae60",
-         "formula": "Scattermapbox(fill='toself', fillcolor=colour, line=dict(width=0.6, color='#8e9bab'))",
-         "explain": "Each district is rendered as a filled polygon using Plotly Scattermapbox with fill='toself'. Thin grey boundaries (0.6px) separate districts. The light carto-positron basemap provides road/settlement context without competing with the risk colours. City markers (red dots) are added as a separate trace on top."},
-    ],
+"mc": {
+    "title": "Monte Carlo risk analysis",
+    "steps": [
+        {"e":"🎲","t":"Shared storm shock variable",
+         "body":"""<div style='font-size:13px;color:#475569;line-height:1.7;margin-bottom:12px;'>One shared N(0,1) draw <b style='color:#8b5cf6;'>shock</b> drives all weather variables together — creating realistic storm correlation.</div>
+<div class='af' style='animation-delay:.1s;background:#f5f3ff;border:1px solid #c4b5fd;border-radius:10px;padding:11px 14px;margin-bottom:10px;'><div style='font-size:10px;color:#5b21b6;font-weight:700;text-transform:uppercase;margin-bottom:5px;'>🎲 Storm correlation</div><div style='font-size:11px;color:#6d28d9;font-family:monospace;line-height:1.8;'>shock ~ N(0, 1)  (one per sim)<br>💨 wind = base × exp(0.16×shock)<br>🌧️ rain = base × exp(0.28×shock)<br>🔴 outages = Poisson(λ + shock)<br>📉 ENS = base × exp(0.22×shock)</div></div>
+<div style='display:grid;grid-template-columns:1fr 1fr;gap:8px;'>
+<div class='ap' style='animation-delay:.5s;background:#fee2e2;border:1px solid #fca5a5;border-radius:9px;padding:10px;text-align:center;'><div style='font-size:20px;'>⛈️</div><div style='font-size:12px;font-weight:600;color:#dc2626;margin-top:4px;'>Correlated</div><div style='font-size:10px;color:#991b1b;'>all fire together</div></div>
+<div class='ap' style='animation-delay:.65s;background:#dcfce7;border:1px solid #86efac;border-radius:9px;padding:10px;text-align:center;'><div style='font-size:20px;'>📈</div><div style='font-size:12px;font-weight:600;color:#15803d;margin-top:4px;'>+35% tail risk</div><div style='font-size:10px;color:#166534;'>vs independent</div></div>
+</div>""",
+         "viz":"<svg viewBox='0 0 180 200' style='width:100%;max-width:180px;'><text x='90' y='16' text-anchor='middle' font-size='11' font-weight='600' fill='#64748b' font-family='sans-serif'>🎲 1 shock → 4 variables</text><rect x='65' y='24' width='50' height='28' rx='8' fill='#f5f3ff' stroke='#c4b5fd' stroke-width='1.5'/><text x='90' y='42' text-anchor='middle' font-size='12' font-weight='700' fill='#6d28d9' font-family='sans-serif'>shock</text><line x1='80' y1='52' x2='35' y2='78' stroke='#8b5cf6' stroke-width='1.5' marker-end='url(#am)' class='al' style='animation-delay:.3s;stroke-dasharray:50;stroke-dashoffset:50;'/><line x1='85' y1='52' x2='72' y2='78' stroke='#8b5cf6' stroke-width='1.5' marker-end='url(#am)' class='al' style='animation-delay:.4s;stroke-dasharray:40;stroke-dashoffset:40;'/><line x1='95' y1='52' x2='108' y2='78' stroke='#8b5cf6' stroke-width='1.5' marker-end='url(#am)' class='al' style='animation-delay:.5s;stroke-dasharray:40;stroke-dashoffset:40;'/><line x1='100' y1='52' x2='145' y2='78' stroke='#8b5cf6' stroke-width='1.5' marker-end='url(#am)' class='al' style='animation-delay:.6s;stroke-dasharray:50;stroke-dashoffset:50;'/><defs><marker id='am' viewBox='0 0 10 10' refX='8' refY='5' markerWidth='5' markerHeight='5' orient='auto'><path d='M2 1L8 5L2 9' fill='none' stroke='#8b5cf6' stroke-width='1.5'/></marker></defs><rect x='10' y='80' width='42' height='24' rx='6' fill='#eff6ff' stroke='#bfdbfe' class='ap' style='animation-delay:.35s;'/><text x='31' y='96' text-anchor='middle' font-size='11' fill='#1d4ed8' font-family='sans-serif' class='af' style='animation-delay:.37s;'>💨 wind</text><rect x='58' y='80' width='42' height='24' rx='6' fill='#f0fdf4' stroke='#bbf7d0' class='ap' style='animation-delay:.45s;'/><text x='79' y='96' text-anchor='middle' font-size='11' fill='#166534' font-family='sans-serif' class='af' style='animation-delay:.47s;'>🌧️ rain</text><rect x='106' y='80' width='42' height='24' rx='6' fill='#fff7ed' stroke='#fed7aa' class='ap' style='animation-delay:.55s;'/><text x='127' y='96' text-anchor='middle' font-size='11' fill='#9a3412' font-family='sans-serif' class='af' style='animation-delay:.57s;'>🔴 out</text><rect x='10' y='116' width='160' height='24' rx='7' fill='#fef2f2' stroke='#ef4444' stroke-width='1' class='ap' style='animation-delay:.75s;'/><text x='90' y='132' text-anchor='middle' font-size='11' fill='#dc2626' font-family='sans-serif' class='af' style='animation-delay:.77s;'>🎯 risk = Σ(layer scores)</text><line x1='90' y1='140' x2='90' y2='158' stroke='#0f172a' stroke-width='1.5' class='al' style='animation-delay:.9s;stroke-dasharray:25;stroke-dashoffset:25;'/><rect x='30' y='160' width='120' height='30' rx='8' fill='#0f172a' class='ap' style='animation-delay:1s;'/><text x='90' y='174' text-anchor='middle' font-size='10' font-weight='600' fill='#e2e8f0' font-family='sans-serif' class='af' style='animation-delay:1.02s;'>P95 · mean fail% · CVaR95</text><text x='90' y='186' text-anchor='middle' font-size='9' fill='#64748b' font-family='sans-serif' class='af' style='animation-delay:1.05s;'>📊 1,000 simulations per place</text></svg>"},
+        {"e":"📊","t":"P95 and CVaR95",
+         "body":"""<div style='font-size:13px;color:#475569;line-height:1.7;margin-bottom:12px;'><b style='color:#dc2626;'>CVaR95</b> is the average loss in the worst 5% of scenarios — more useful than just the worst single case.</div>
+<div class='af' style='animation-delay:.1s;background:#fee2e2;border:1px solid #fca5a5;border-radius:10px;padding:11px 14px;margin-bottom:10px;'><div style='font-size:10px;color:#991b1b;font-weight:700;text-transform:uppercase;margin-bottom:5px;'>📊 CVaR95 formula</div><div style='font-size:11px;color:#b91c1c;font-family:monospace;line-height:1.8;'>P95 = percentile(loss_array, 95)<br>CVaR95 = mean(loss[loss ≥ P95])<br>≠ array slicing (old bug ✗)</div></div>
+<div style='display:grid;grid-template-columns:1fr 1fr;gap:8px;'>
+<div class='ap' style='animation-delay:.4s;background:#f5f3ff;border:1px solid #c4b5fd;border-radius:9px;padding:10px;text-align:center;'><div style='font-size:18px;'>📈</div><div style='font-size:17px;font-weight:700;color:#6d28d9;margin:3px 0;'>58.7/100</div><div style='font-size:10px;color:#7c3aed;'>P95 risk — Newcastle</div></div>
+<div class='ap' style='animation-delay:.55s;background:#fee2e2;border:1px solid #fca5a5;border-radius:9px;padding:10px;text-align:center;'><div style='font-size:18px;'>💸</div><div style='font-size:17px;font-weight:700;color:#dc2626;margin:3px 0;'>£161.76m</div><div style='font-size:10px;color:#991b1b;'>CVaR95 loss</div></div>
+<div class='ap' style='animation-delay:.7s;background:#fffbeb;border:1px solid #fde68a;border-radius:9px;padding:10px;text-align:center;'><div style='font-size:18px;'>⚡</div><div style='font-size:17px;font-weight:700;color:#92400e;margin:3px 0;'>39.8%</div><div style='font-size:10px;color:#a16207;'>Mean failure prob</div></div>
+<div class='ap' style='animation-delay:.85s;background:#dcfce7;border:1px solid #86efac;border-radius:9px;padding:10px;text-align:center;'><div style='font-size:18px;'>🎲</div><div style='font-size:17px;font-weight:700;color:#15803d;margin:3px 0;'>1,000</div><div style='font-size:10px;color:#166534;'>Simulations each</div></div>
+</div>""",
+         "viz":"<svg viewBox='0 0 180 180' style='width:100%;max-width:180px;'><text x='90' y='16' text-anchor='middle' font-size='11' font-weight='600' fill='#64748b' font-family='sans-serif'>Loss distribution</text><polyline fill='none' stroke='#e2e8f0' stroke-width='1' points='18,150 162,150 18,150 18,30'/><polyline fill='none' stroke='#8b5cf6' stroke-width='2' stroke-linecap='round' points='18,148 30,146 42,140 54,128 66,110 78,90 90,78 102,82 114,100 126,126 138,144 150,149 162,150' class='al' style='animation-delay:.2s;'/><rect x='134' y='50' width='28' height='100' rx='0' fill='#ef4444' opacity='.25' class='af' style='animation-delay:.9s;'/><line x1='134' y1='30' x2='134' y2='152' stroke='#ef4444' stroke-width='1.5' stroke-dasharray='4 3' class='al' style='animation-delay:1s;stroke-dasharray:130;stroke-dashoffset:130;'/><text x='134' y='26' text-anchor='middle' font-size='9' fill='#dc2626' font-family='sans-serif' class='af' style='animation-delay:1.1s;'>P95</text><text x='148' y='85' font-size='9' fill='#dc2626' font-family='sans-serif' class='af' style='animation-delay:1.1s;'>CVaR</text><text x='148' y='96' font-size='9' fill='#dc2626' font-family='sans-serif' class='af' style='animation-delay:1.1s;'>95</text><text x='90' y='165' text-anchor='middle' font-size='10' fill='#64748b' font-family='sans-serif'>loss →   shaded = worst 5%</text></svg>"},
+    ]
+},
 
-    "resilience": [
-        {"title": "Base score: 92",
-         "color": "#27ae60",
-         "formula": "resilience = 92  (UK grids are highly reliable by default)",
-         "explain": "The resilience model starts at 92/100. This reflects the UK's genuinely high grid reliability — Ofgem RIIO-ED2 data shows average customers experience less than 1 hour of interruption per year. The model deducts points for specific risk factors rather than building up from zero."},
-        {"title": "Penalty 1 — Risk score (weight 0.28)",
-         "color": "#c0392b",
-         "formula": "pen_risk = 0.28 × risk_score  →  max penalty: 0.28 × 100 = 28 pts",
-         "explain": "The overall risk score directly penalises resilience. A location scoring 80 on risk (e.g. during Storm Arwen) loses 22.4 points here alone. This is the largest single penalty term, reflecting that high operational risk is the primary driver of low resilience."},
-        {"title": "Penalties 2–6 combined",
-         "color": "#7F77DD",
-         "formula": "−0.11×social  −9×grid_fail  −5×renew_fail  −7×cascade  −clip(loss/£25m,0,1)×6",
-         "explain": "Social vulnerability (−0.11×) reduces resilience because deprived areas recover more slowly. Grid failure probability is multiplied by 9 — even a 3% failure chance subtracts 0.27 points. Renewable failure (−5×) captures Dunkelflaute risk. Cascade (−7×) captures interdependency with water/telecom. Finance capped at −6 pts."},
-        {"title": "Infrastructure cascade",
-         "color": "#e67e22",
-         "formula": "water = power^1.35 × 0.74;  telecom = power^1.22 × 0.82;  transport = ((power+telecom)/2) × 0.70",
-         "explain": "Power grid failure cascades to dependent infrastructure using power-law relationships (Panteli & Mancarella, 2015). Water and wastewater pumping fails non-linearly. Telecommunications partially follows. Transport is affected by both power and telecom. The cascade score feeds back into the resilience penalty."},
-        {"title": "Classification + final score",
-         "color": "#185FA5",
-         "formula": "≥80 Robust  |  ≥60 Functional  |  ≥40 Stressed  |  <40 Fragile  [range: 15–100]",
-         "explain": "The final score is clipped to 15–100 (15 is the theoretical minimum under a full blackout in a highly deprived area). Under calm live conditions most UK areas score 68–82 (Functional to Robust). Stressed/Fragile classification triggers investment priority flags in the Investment Engine tab."},
-    ],
+"scenario": {
+    "title": "Scenario stress testing",
+    "steps": [
+        {"e":"☀️","t":"Live baseline — no multipliers",
+         "body":"""<div style='font-size:13px;color:#475569;line-height:1.7;margin-bottom:12px;'>The live baseline uses real-time weather with no amplification. All calm guards are active.</div>
+<div style='display:flex;flex-direction:column;gap:7px;'>
+<div class='ar' style='animation-delay:.1s;display:flex;justify-content:space-between;align-items:center;padding:9px 13px;background:#dcfce7;border:1px solid #86efac;border-radius:9px;'><span style='font-size:13px;'>☀️ Live / Real-time</span><span style='font-size:12px;font-weight:700;color:#15803d;'>1.0× — no change</span></div>
+<div class='ar' style='animation-delay:.2s;display:flex;justify-content:space-between;align-items:center;padding:9px 13px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:9px;'><span style='font-size:13px;'>💨 Extreme wind</span><span style='font-size:12px;font-weight:700;color:#1d4ed8;'>finance ×2.15</span></div>
+<div class='ar' style='animation-delay:.3s;display:flex;justify-content:space-between;align-items:center;padding:9px 13px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:9px;'><span style='font-size:13px;'>🌊 Flood</span><span style='font-size:12px;font-weight:700;color:#166534;'>finance ×2.40</span></div>
+<div class='ar' style='animation-delay:.4s;display:flex;justify-content:space-between;align-items:center;padding:9px 13px;background:#fff7ed;border:1px solid #fed7aa;border-radius:9px;'><span style='font-size:13px;'>☀️ Heatwave</span><span style='font-size:12px;font-weight:700;color:#c2410c;'>finance ×2.00</span></div>
+<div class='ar' style='animation-delay:.5s;display:flex;justify-content:space-between;align-items:center;padding:9px 13px;background:#fefce8;border:1px solid #fde047;border-radius:9px;'><span style='font-size:13px;'>🏜️ Drought</span><span style='font-size:12px;font-weight:700;color:#a16207;'>finance ×2.10</span></div>
+<div class='ar' style='animation-delay:.6s;display:flex;justify-content:space-between;align-items:center;padding:9px 13px;background:#f5f3ff;border:1px solid #c4b5fd;border-radius:9px;'><span style='font-size:13px;'>🌀 Compound</span><span style='font-size:12px;font-weight:700;color:#6d28d9;'>finance ×3.80</span></div>
+<div class='ar' style='animation-delay:.7s;display:flex;justify-content:space-between;align-items:center;padding:9px 13px;background:#fee2e2;border:1px solid #fca5a5;border-radius:9px;'><span style='font-size:13px;'>🌑 Total blackout</span><span style='font-size:12px;font-weight:700;color:#dc2626;'>finance ×4.20</span></div>
+</div>""",
+         "viz":"<svg viewBox='0 0 180 210' style='width:100%;max-width:180px;'><text x='90' y='16' text-anchor='middle' font-size='11' font-weight='600' fill='#64748b' font-family='sans-serif'>Loss × multiplier</text><rect x='10' y='28' width='25' height='155' rx='4' fill='#22c55e' class='af' style='animation-delay:.05s;'/><text x='22' y='196' text-anchor='middle' font-size='8' fill='#64748b' font-family='sans-serif'>☀️</text><rect x='40' y='56' width='25' height='127' rx='4' fill='#3b82f6' class='af' style='animation-delay:.2s;'/><text x='52' y='196' text-anchor='middle' font-size='8' fill='#64748b' font-family='sans-serif'>💨</text><rect x='70' y='43' width='25' height='140' rx='4' fill='#06b6d4' class='af' style='animation-delay:.3s;'/><text x='82' y='196' text-anchor='middle' font-size='8' fill='#64748b' font-family='sans-serif'>🌊</text><rect x='100' y='62' width='25' height='121' rx='4' fill='#f97316' class='af' style='animation-delay:.4s;'/><text x='112' y='196' text-anchor='middle' font-size='8' fill='#64748b' font-family='sans-serif'>☀️</text><rect x='130' y='28' width='25' height='77' rx='4' fill='#8b5cf6' class='af' style='animation-delay:.6s;'/><text x='142' y='196' text-anchor='middle' font-size='8' fill='#64748b' font-family='sans-serif'>🌀</text><rect x='155' y='18' width='20' height='165' rx='4' fill='#ef4444' class='af' style='animation-delay:.7s;'/><text x='165' y='196' text-anchor='middle' font-size='8' fill='#64748b' font-family='sans-serif'>🌑</text><line x1='8' y1='183' x2='175' y2='183' stroke='#e2e8f0' stroke-width='1'/><text x='90' y='207' text-anchor='middle' font-size='9' fill='#94a3b8' font-family='sans-serif'>£183m → £394m → £771m</text></svg>"},
+    ]
+},
 
-    "failure": [
-        {"title": "Z-score architecture",
-         "color": "#7F77DD",
-         "formula": "z = −4.45 + 1.05×base + 0.95×grid + 0.55×renew + 0.45×social_n + ...",
-         "explain": "The logistic failure model combines 9 inputs into a single z-score. The intercept (−4.45) is calibrated so that at UK average conditions (base≈0.05, grid≈0.04, social≈0.45, no outages) z≈−4.2 and prob≈1.5% — matching the national annual interruption rate from Ofgem RIIO-ED2."},
-        {"title": "Logistic function → probability",
-         "color": "#c0392b",
-         "formula": "prob = 1 / (1 + exp(−z))",
-         "explain": "The logistic (sigmoid) function converts the z-score to a probability (0–1). Negative z → probability near 0. z=0 → probability 50%. Positive z → probability near 1. The z-score calibration ensures realistic UK values: typically z≈−4 in calm conditions → prob≈1.8%, before the calm guard."},
-        {"title": "Calm-weather guard",
-         "color": "#27ae60",
-         "formula": "if calm: prob = min(prob × 0.35, 0.18)  →  max 18% in calm conditions",
-         "explain": "The calm guard applies a 0.35 multiplier and a hard cap of 18%. This prevents the enhanced failure model showing 'Critical' (>45%) in normal UK winter weather. Without this guard, moderate wind+rain combinations would produce unrealistic 25–40% failure probabilities."},
-        {"title": "Recommendation score (0–100)",
-         "color": "#BA7517",
-         "formula": "rec = 0.30×risk + 0.22×social + 0.18×(100−res) + 0.13×loss_n + 0.10×ENS_n + 0.07×out_n",
-         "explain": "The recommendation score drives investment prioritisation. It weights risk (30%), social vulnerability (22%), resilience gap (18%), financial loss (13%), ENS (10%) and outage history (7%). Under calm live conditions typical scores are 20–38, placing most areas in the Monitor band."},
-        {"title": "Priority bands + indicative cost",
-         "color": "#185FA5",
-         "formula": "cost = £120,000 + rec×£8,500 + outages×£35,000 + clip(ENS,0,1000)×£260",
-         "explain": "Priority 1 (≥75): immediate action — typically rec scores only achieved during stress scenarios. Priority 2 (≥55): high priority. Priority 3 (≥35): medium priority. Monitor (<35): normal operations. The £49m programme estimate = 106 districts × average £463k each — dominated by the base cost and rec×£8,500 term."},
-    ],
+"finance": {
+    "title": "Financial loss model",
+    "steps": [
+        {"e":"⏱️","t":"Step 1 — Duration estimate",
+         "body":"""<div style='font-size:13px;color:#475569;line-height:1.7;margin-bottom:12px;'>Duration feeds all three MWh-based components. More faults = longer outage.</div>
+<div class='af' style='animation-delay:.1s;background:#e0f2fe;border:1px solid #7dd3fc;border-radius:10px;padding:11px 14px;margin-bottom:12px;'><div style='font-size:10px;color:#0369a1;font-weight:700;text-transform:uppercase;margin-bottom:5px;'>⏱️ Duration formula</div><div style='font-size:11px;color:#0284c7;font-family:monospace;line-height:1.8;'>duration_h = 1.5 + clip(faults/6, 0,1) × 5.5<br>→ 1 fault: 2.4 h<br>→ 3 faults: 4.3 h<br>→ 6+ faults: 7.0 h<br>ENS_MWh = ENS_MW × duration_h</div></div>
+<div style='display:flex;flex-direction:column;gap:7px;'>
+<div class='ar' style='animation-delay:.4s;display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#fffbeb;border-radius:8px;'><span style='font-size:13px;'>🌤️ 1 fault</span><span style='font-size:12px;font-weight:600;color:#92400e;'>≈ 2.4 hours</span></div>
+<div class='ar' style='animation-delay:.5s;display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#fff7ed;border-radius:8px;'><span style='font-size:13px;'>⚠️ 3 faults</span><span style='font-size:12px;font-weight:600;color:#c2410c;'>≈ 4.3 hours</span></div>
+<div class='ar' style='animation-delay:.6s;display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#fee2e2;border-radius:8px;'><span style='font-size:13px;'>🚨 6+ faults</span><span style='font-size:12px;font-weight:600;color:#dc2626;'>7.0 hours max</span></div>
+</div>""",
+         "viz":"<svg viewBox='0 0 180 180' style='width:100%;max-width:180px;'><text x='90' y='16' text-anchor='middle' font-size='11' font-weight='600' fill='#64748b' font-family='sans-serif'>⏱️ Duration vs faults</text><polyline fill='none' stroke='#e2e8f0' stroke-width='1' points='25,150 165,150 25,150 25,30'/><polyline fill='none' stroke='#3b82f6' stroke-width='2.5' stroke-linecap='round' points='25,136 48,122 72,110 95,100 118,94 141,89 165,88' class='al' style='animation-delay:.2s;'/><text x='25' y='164' font-size='9' fill='#94a3b8' font-family='sans-serif'>0</text><text x='90' y='164' text-anchor='middle' font-size='9' fill='#94a3b8' font-family='sans-serif'>3</text><text x='160' y='164' text-anchor='middle' font-size='9' fill='#94a3b8' font-family='sans-serif'>6+</text><text x='14' y='154' font-size='9' fill='#94a3b8' font-family='sans-serif'>1h</text><text x='14' y='91' font-size='9' fill='#94a3b8' font-family='sans-serif'>7h</text><text x='90' y='175' text-anchor='middle' font-size='10' fill='#64748b' font-family='sans-serif'>Number of faults</text></svg>"},
+        {"e":"💰","t":"5 cost components",
+         "body":"""<div style='font-size:13px;color:#475569;line-height:1.7;margin-bottom:12px;'>Five components summed. VoLL dominates at ~65%.</div>
+<div style='display:flex;flex-direction:column;gap:6px;'>
+<div class='ar' style='animation-delay:.05s;display:flex;align-items:center;gap:9px;padding:8px 12px;background:#eff6ff;border-radius:8px;'><span style='font-size:18px;'>⚡</span><span style='flex:1;font-size:11px;color:#1e40af;'>VoLL — ENS_MWh × £17,000/MWh</span><span style='background:#3b82f6;color:#fff;font-size:11px;font-weight:700;padding:1px 8px;border-radius:10px;'>~65%</span></div>
+<div class='ar' style='animation-delay:.15s;display:flex;align-items:center;gap:9px;padding:8px 12px;background:#f0fdf4;border-radius:8px;'><span style='font-size:18px;'>🏠</span><span style='flex:1;font-size:11px;color:#166534;'>Customer — count × £48 each</span><span style='background:#10b981;color:#fff;font-size:11px;font-weight:700;padding:1px 8px;border-radius:10px;'>~8%</span></div>
+<div class='ar' style='animation-delay:.25s;display:flex;align-items:center;gap:9px;padding:8px 12px;background:#fffbeb;border-radius:8px;'><span style='font-size:18px;'>🏢</span><span style='flex:1;font-size:11px;color:#92400e;'>Business — MWh × £1,100 × density</span><span style='background:#f59e0b;color:#fff;font-size:11px;font-weight:700;padding:1px 8px;border-radius:10px;'>~15%</span></div>
+<div class='ar' style='animation-delay:.35s;display:flex;align-items:center;gap:9px;padding:8px 12px;background:#f5f3ff;border-radius:8px;'><span style='font-size:18px;'>🔧</span><span style='flex:1;font-size:11px;color:#4c1d95;'>Restoration — faults × £18,500</span><span style='background:#8b5cf6;color:#fff;font-size:11px;font-weight:700;padding:1px 8px;border-radius:10px;'>~5%</span></div>
+<div class='ar' style='animation-delay:.45s;display:flex;align-items:center;gap:9px;padding:8px 12px;background:#fdf2f8;border-radius:8px;'><span style='font-size:18px;'>🏥</span><span style='flex:1;font-size:11px;color:#831843;'>Critical — MWh × £320 × social_n</span><span style='background:#ec4899;color:#fff;font-size:11px;font-weight:700;padding:1px 8px;border-radius:10px;'>~7%</span></div>
+<div class='ar' style='animation-delay:.6s;display:flex;align-items:center;justify-content:space-between;padding:9px 12px;background:#0f172a;border-radius:8px;margin-top:3px;'><span style='font-size:12px;color:#e2e8f0;font-weight:600;'>📊 × scenario multiplier</span><span style='font-size:11px;color:#94a3b8;'>1.0× → 4.2×</span></div>
+</div>""",
+         "viz":"<svg viewBox='0 0 180 200' style='width:100%;max-width:180px;'><text x='90' y='16' text-anchor='middle' font-size='11' font-weight='600' fill='#64748b' font-family='sans-serif'>Live total: £183m</text><rect x='10' y='28' width='160' height='24' rx='5' fill='#3b82f6' class='af' style='animation-delay:.05s;'/><text x='90' y='44' text-anchor='middle' font-size='11' fill='#fff' font-family='sans-serif' class='af' style='animation-delay:.07s;'>⚡ VoLL ~£119m (65%)</text><rect x='10' y='56' width='50' height='20' rx='5' fill='#10b981' class='af' style='animation-delay:.15s;'/><text x='35' y='70' text-anchor='middle' font-size='9' fill='#fff' font-family='sans-serif' class='af' style='animation-delay:.17s;'>🏠 £15m</text><rect x='64' y='56' width='96' height='20' rx='5' fill='#f59e0b' class='af' style='animation-delay:.25s;'/><text x='112' y='70' text-anchor='middle' font-size='9' fill='#fff' font-family='sans-serif' class='af' style='animation-delay:.27s;'>🏢 Business £27m</text><rect x='10' y='80' width='30' height='18' rx='5' fill='#8b5cf6' class='af' style='animation-delay:.35s;'/><text x='25' y='93' text-anchor='middle' font-size='8' fill='#fff' font-family='sans-serif'>🔧</text><rect x='44' y='80' width='40' height='18' rx='5' fill='#ec4899' class='af' style='animation-delay:.45s;'/><text x='64' y='93' text-anchor='middle' font-size='8' fill='#fff' font-family='sans-serif'>🏥 £13m</text><line x1='90' y1='104' x2='90' y2='122' stroke='#64748b' stroke-width='1.5' class='al' style='animation-delay:.65s;stroke-dasharray:25;stroke-dashoffset:25;'/><rect x='10' y='124' width='160' height='26' rx='7' fill='#0f172a' class='ap' style='animation-delay:.75s;'/><text x='90' y='141' text-anchor='middle' font-size='11' font-weight='700' fill='#fff' font-family='sans-serif' class='af' style='animation-delay:.77s;'>× scenario multiplier</text><rect x='10' y='158' width='42' height='22' rx='5' fill='#22c55e' class='ap' style='animation-delay:.9s;'/><text x='31' y='173' text-anchor='middle' font-size='9' fill='#fff' font-family='sans-serif'>1.0× ☀️</text><rect x='57' y='158' width='42' height='22' rx='5' fill='#f97316' class='ap' style='animation-delay:1s;'/><text x='78' y='173' text-anchor='middle' font-size='9' fill='#fff' font-family='sans-serif'>2.4× 🌊</text><rect x='104' y='158' width='66' height='22' rx='5' fill='#dc2626' class='ap' style='animation-delay:1.1s;'/><text x='137' y='173' text-anchor='middle' font-size='9' fill='#fff' font-family='sans-serif'>4.2× 🌑 = £771m</text></svg>"},
+    ]
+},
 
-    "scenario": [
-        {"title": "Live baseline (1.0× — no multipliers)",
-         "color": "#27ae60",
-         "formula": "all multipliers = 1.0;  STRESS_PROFILES inactive;  calm guards active",
-         "explain": "The live baseline uses real-time weather from Open-Meteo APIs with no amplification. Calm-weather guards are active. Risk ≈ 10–15, resilience ≈ 75–80, financial loss ≈ £140–200m across the region. This is the reference point for all scenario comparisons."},
-        {"title": "Physics-based scenario multipliers",
-         "color": "#e67e22",
-         "formula": "Extreme wind: finance×2.15, wind×3.60  |  Flood: finance×2.40, rain×7.50  |  Blackout: finance×4.20",
-         "explain": "Each scenario multiplies the relevant weather variables and financial loss by calibrated factors. Wind multiplier 3.60 means wind speed is 3.6× its live value — consistent with a 1-in-10-year UK severe gale. The finance multiplier captures extended duration, cascading damage and emergency response costs."},
-        {"title": "STRESS_PROFILES — mandatory floors",
-         "color": "#c0392b",
-         "formula": "Extreme wind: risk_floor=72, failure_floor=0.46, resilience_pen=18  |  Blackout: risk_floor=92",
-         "explain": "STRESS_PROFILES override the bottom of the output range — ensuring scenarios always look more severe than the live baseline even if the weather multipliers alone would not produce enough uplift. They encode the engineering reality: in a real storm, response is harder and duration is longer than models alone predict."},
-        {"title": "Calibration sources",
-         "color": "#185FA5",
-         "formula": "Storm Arwen 2021, July 2022 heatwave, 2013–14 winter storms, Met Office return periods",
-         "explain": "The multiplier values are calibrated against post-incident cost analyses. Storm Arwen (Nov 2021) affected 1 million customers for up to 10 days — informing the Extreme Wind profile. The July 2022 heatwave caused transformer failures across England — informing the Heatwave profile. The Compound scenario combines the worst elements of all."},
-        {"title": "Scenario loss comparison",
-         "color": "#7F77DD",
-         "formula": "scenario_loss = live_loss × finance_multiplier  →  Live £183m → Blackout ~£771m",
-         "explain": "Financial loss scales linearly with the finance multiplier because the underlying loss formula components (VoLL, customer cost etc.) all depend on ENS and outage count, which themselves scale with the scenario. The 4.2× Blackout multiplier represents a full regional cascade — consistent with UK major incident cost estimates."},
-    ],
+"resilience": {
+    "title": "Resilience index",
+    "steps": [
+        {"e":"🛡️","t":"Base 92 minus 6 penalties",
+         "body":"""<div style='font-size:13px;color:#475569;line-height:1.7;margin-bottom:12px;'>UK grids start at 92. Penalties deducted per risk factor. Most calm areas end up 68–82.</div>
+<div style='display:flex;flex-direction:column;gap:6px;'>
+<div class='ar' style='animation-delay:.05s;display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#f0fdf4;border-radius:8px;border:1px solid #bbf7d0;'><span style='font-size:13px;font-weight:700;color:#166534;'>🏁 Base</span><span style='font-size:15px;font-weight:700;color:#15803d;'>92</span></div>
+<div class='ar' style='animation-delay:.15s;display:flex;justify-content:space-between;align-items:center;padding:7px 12px;background:#fef2f2;border-radius:8px;'><span style='font-size:12px;color:#991b1b;'>⚠️ − 0.28 × risk</span><span style='font-size:11px;color:#dc2626;font-weight:600;'>max −28</span></div>
+<div class='ar' style='animation-delay:.25s;display:flex;justify-content:space-between;align-items:center;padding:7px 12px;background:#fef2f2;border-radius:8px;'><span style='font-size:12px;color:#991b1b;'>🏘️ − 0.11 × social</span><span style='font-size:11px;color:#dc2626;font-weight:600;'>max −11</span></div>
+<div class='ar' style='animation-delay:.35s;display:flex;justify-content:space-between;align-items:center;padding:7px 12px;background:#fef2f2;border-radius:8px;'><span style='font-size:12px;color:#991b1b;'>⚡ − 9 × grid_fail</span><span style='font-size:11px;color:#dc2626;font-weight:600;'>max −9</span></div>
+<div class='ar' style='animation-delay:.45s;display:flex;justify-content:space-between;align-items:center;padding:7px 12px;background:#fef2f2;border-radius:8px;'><span style='font-size:12px;color:#991b1b;'>🌬️ − 5 × renew_fail</span><span style='font-size:11px;color:#dc2626;font-weight:600;'>max −5</span></div>
+<div class='ar' style='animation-delay:.55s;display:flex;justify-content:space-between;align-items:center;padding:7px 12px;background:#fef2f2;border-radius:8px;'><span style='font-size:12px;color:#991b1b;'>🔗 − 7 × cascade</span><span style='font-size:11px;color:#dc2626;font-weight:600;'>max −7</span></div>
+<div class='ar' style='animation-delay:.68s;display:flex;justify-content:space-between;align-items:center;padding:9px 12px;background:#f0fdf4;border:1.5px solid #16a34a;border-radius:8px;margin-top:2px;'><span style='font-size:13px;color:#166534;font-weight:700;'>🛡️ = Resilience 15–100</span></div>
+</div>""",
+         "viz":"<svg viewBox='0 0 180 230' style='width:100%;max-width:180px;'><rect x='10' y='10' width='160' height='32' rx='8' fill='#dcfce7' stroke='#86efac' stroke-width='1'/><text x='90' y='30' text-anchor='middle' font-size='14' font-weight='700' fill='#15803d' font-family='sans-serif'>🏁 Base: 92</text><rect x='10' y='52' width='158' height='22' rx='5' fill='#fee2e2' class='af' style='animation-delay:.15s;'/><text x='89' y='67' text-anchor='middle' font-size='10' fill='#dc2626' font-family='sans-serif'>⚠️ − risk penalty max −28</text><rect x='10' y='78' width='138' height='22' rx='5' fill='#fee2e2' class='af' style='animation-delay:.25s;'/><text x='79' y='93' text-anchor='middle' font-size='10' fill='#dc2626' font-family='sans-serif'>🏘️ − social max −11</text><rect x='10' y='104' width='118' height='22' rx='5' fill='#fee2e2' class='af' style='animation-delay:.35s;'/><text x='69' y='119' text-anchor='middle' font-size='10' fill='#dc2626' font-family='sans-serif'>⚡ − grid_fail ×9</text><rect x='10' y='130' width='98' height='22' rx='5' fill='#fee2e2' class='af' style='animation-delay:.45s;'/><text x='59' y='145' text-anchor='middle' font-size='10' fill='#dc2626' font-family='sans-serif'>🌬️ − renew ×5</text><rect x='10' y='156' width='78' height='22' rx='5' fill='#fee2e2' class='af' style='animation-delay:.55s;'/><text x='49' y='171' text-anchor='middle' font-size='10' fill='#dc2626' font-family='sans-serif'>🔗 − cascade ×7</text><rect x='10' y='188' width='160' height='28' rx='8' fill='#0f172a' class='ap' style='animation-delay:.7s;'/><text x='90' y='206' text-anchor='middle' font-size='12' font-weight='700' fill='#fff' font-family='sans-serif'>🛡️ = Resilience 15–100</text></svg>"},
+    ]
+},
 
-    "finance": [
-        {"title": "Outage duration (feeds all 3 MWh-based components)",
-         "color": "#378ADD",
-         "formula": "duration_h = 1.5 + clip(faults / 6, 0, 1) × 5.5  →  range: 1.5h to 7.0h",
-         "explain": "Duration is estimated from the number of simultaneous faults. A single fault typically clears in 1.5 hours (fast-clearance). Six or more faults simultaneously require sequential crew deployment and can take 7 hours. This duration is then used to convert ENS_MW to ENS_MWh for the VoLL, business disruption and critical services calculations."},
-        {"title": "Component 1 — VoLL (Value of Lost Load)",
-         "color": "#378ADD",
-         "formula": "VoLL = ENS_MWh × £17,000/MWh",
-         "explain": "VoLL is the headline economic impact. £17,000/MWh is the BEIS 2019 estimate for a mixed domestic and commercial customer base — derived from household and business surveys asking 'how much would you pay to avoid a power cut?'. Ofgem RIIO-ED2 used £16,240–£21,000/MWh range. This single component is typically 60–70% of total loss."},
-        {"title": "Component 2 — Customer interruption",
-         "color": "#1D9E75",
-         "formula": "customer_cost = affected_customers × £48",
-         "explain": "Each affected customer (household or business) incurs £48 of direct inconvenience — spoiled food, lost heating, missed work. Source: RAEng 2014 blackout study and DNO customer research 2023 (£35–£55 range). Note: this is NOT the Ofgem IIS regulatory penalty (£87) — that is a financial incentive for the DNO, not the customer's actual cost."},
-        {"title": "Components 3–5",
-         "color": "#BA7517",
-         "formula": "business = ENS_MWh×£1,100×density  |  restoration = faults×£18,500  |  critical = ENS_MWh×£320×(social/100)",
-         "explain": "Business disruption (CBI 2011): scales with commercial area density — a city-centre postcode gets full £1,100/MWh, residential suburb gets ~£220/MWh. Restoration (NPg RIIO-ED2): £18,500 per fault incident including crew, materials and overhead. Critical services (NHS/CQC/BMA): scales with social vulnerability — NHS and care homes in deprived areas face highest generator costs."},
-        {"title": "Funding priority score",
-         "color": "#7F77DD",
-         "formula": "priority = 0.26×risk + 0.20×(100−res) + 0.18×social + 0.15×loss_n + 0.11×ENS_n + 0.06×out_n + 0.04×rec",
-         "explain": "The 7-criterion funding priority score ranks postcodes for Ofgem investment submissions. Risk and resilience gap have the highest weights (26% and 20%). Social vulnerability (18%) ensures deprived areas are not systematically under-invested. Immediate funding threshold: ≥78/100. Under calm conditions typical scores are 15–35 (Monitor band)."},
-    ],
+"investment": {
+    "title": "Postcode investment engine",
+    "steps": [
+        {"e":"📮","t":"Outage grouping + penalties",
+         "body":"""<div style='font-size:13px;color:#475569;line-height:1.7;margin-bottom:12px;'>NPG outage records are grouped by postcode. Faults and customers reduce the resilience score.</div>
+<div class='af' style='animation-delay:.1s;background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:11px 14px;margin-bottom:10px;'><div style='font-size:10px;color:#a16207;font-weight:700;text-transform:uppercase;margin-bottom:5px;'>📮 Penalty formula</div><div style='font-size:11px;color:#92400e;font-family:monospace;line-height:1.8;'>outage_pen = clip(count/6, 0,1) × 16<br>cust_pen   = clip(cust/1500, 0,1) × 12<br>dist_pen   = clip(dist_km/15, 0,1) × 4<br>pc_res = nearest_res − all_pens</div></div>
+<div class='af' style='animation-delay:.4s;background:#e0f2fe;border:1px solid #7dd3fc;border-radius:10px;padding:11px 14px;margin-bottom:10px;'><div style='font-size:10px;color:#0369a1;font-weight:700;text-transform:uppercase;margin-bottom:5px;'>💷 Indicative cost</div><div style='font-size:11px;color:#0284c7;font-family:monospace;line-height:1.8;'>cost = £120,000 base<br>+ rec_score × £8,500<br>+ outages × £35,000<br>+ clip(ENS,0,1000) × £260</div></div>
+<div class='af' style='animation-delay:.65s;background:#dcfce7;border:1px solid #86efac;border-radius:9px;padding:9px 13px;font-size:11px;color:#166534;'>📊 106 districts × avg £463k ≈ £49m programme</div>""",
+         "viz":"<svg viewBox='0 0 180 200' style='width:100%;max-width:180px;'><text x='90' y='16' text-anchor='middle' font-size='11' font-weight='600' fill='#64748b' font-family='sans-serif'>Cost breakdown</text><rect x='20' y='28' width='140' height='22' rx='5' fill='#3b82f6' class='af' style='animation-delay:.1s;'/><text x='90' y='43' text-anchor='middle' font-size='10' fill='#fff' font-family='sans-serif' class='af' style='animation-delay:.12s;'>🏗️ £120k base</text><rect x='20' y='54' width='120' height='22' rx='5' fill='#8b5cf6' class='af' style='animation-delay:.2s;'/><text x='80' y='69' text-anchor='middle' font-size='10' fill='#fff' font-family='sans-serif' class='af' style='animation-delay:.22s;'>🎯 rec_score × £8,500</text><rect x='20' y='80' width='80' height='22' rx='5' fill='#f97316' class='af' style='animation-delay:.3s;'/><text x='60' y='95' text-anchor='middle' font-size='10' fill='#fff' font-family='sans-serif' class='af' style='animation-delay:.32s;'>🔴 outages × £35k</text><rect x='20' y='106' width='40' height='22' rx='5' fill='#ec4899' class='af' style='animation-delay:.4s;'/><text x='40' y='121' text-anchor='middle' font-size='9' fill='#fff' font-family='sans-serif' class='af' style='animation-delay:.42s;'>📉 ENS</text><line x1='90' y1='134' x2='90' y2='154' stroke='#0f172a' stroke-width='1.5' class='al' style='animation-delay:.6s;stroke-dasharray:25;stroke-dashoffset:25;'/><rect x='20' y='156' width='140' height='30' rx='8' fill='#0f172a' class='ap' style='animation-delay:.7s;'/><text x='90' y='171' text-anchor='middle' font-size='10' font-weight='600' fill='#e2e8f0' font-family='sans-serif' class='af' style='animation-delay:.72s;'>💰 Total per postcode</text><text x='90' y='183' text-anchor='middle' font-size='11' font-weight='700' fill='#fff' font-family='sans-serif' class='af' style='animation-delay:.75s;'>avg £463k</text></svg>"},
+    ]
+},
 
-    "investment": [
-        {"title": "Step 1 — Group NPG outages by postcode",
-         "color": "#378ADD",
-         "formula": "df.groupby('postcode_label').agg(count=('id','count'), customers=('affected_customers','sum'))",
-         "explain": "Northern Powergrid live outage records are grouped by postcode label (first 3–4 characters of the affected postcode). Each group becomes one postcode record with an aggregated fault count, total customers affected and geographic centroid. This creates the raw postcode-level evidence base."},
-        {"title": "Step 2 — Outage pressure penalties",
-         "color": "#e67e22",
-         "formula": "outage_pen = clip(count/6, 0,1)×16;  cust_pen = clip(cust/1500, 0,1)×12;  dist_pen = clip(dist_km/15, 0,1)×4",
-         "explain": "Each postcode is penalised based on its outage record. Up to 16 points for fault frequency (capped at 6+ faults), 12 points for customer impact (capped at 1,500+ affected) and 4 points for proximity to the nearest configured place. These penalties reduce the postcode's resilience score below the place-level value."},
-        {"title": "Step 3 — Recommendation score",
-         "color": "#BA7517",
-         "formula": "rec = 0.30×risk + 0.22×social + 0.18×(100−res) + 0.13×(loss/max×100) + 0.10×(ENS/700×100) + 0.07×clip(out/6)×100",
-         "explain": "The recommendation score (0–100) is calculated per postcode using the same 6-criterion formula as the failure tab. Under calm live conditions: typical rec = 20–38 (Monitor band). Under Storm scenario: rec can reach 75–90 (Priority 1) in high-risk postcodes with outage history."},
-        {"title": "Step 4 — Indicative investment cost",
-         "color": "#7F77DD",
-         "formula": "cost = £120,000 + rec×£8,500 + outages×£35,000 + clip(ENS, 0, 1000)×£260",
-         "explain": "The £120k base covers minimum mobilisation (planning, surveys, safety). The rec×£8,500 term scales with how urgently investment is needed. Each outage record adds £35k (average repair cost from NPg RIIO-ED2). ENS×£260 represents backup generation or temporary supply costs. 106 districts × avg £463k = £49m total."},
-        {"title": "Step 5 — Total exposed loss",
-         "color": "#c0392b",
-         "formula": "total_exposed = sum(financial_loss_gbp across all postcode records)",
-         "explain": "The total exposed loss (£1.8bn) is the accumulated economic risk across all 106 postcode districts — not a single event loss, but the sum of all postcode-level financial loss estimates. It represents the total economic value at risk in the region under current conditions. Under stress scenarios this rises to £4–8bn."},
-    ],
+"validation": {
+    "title": "10-point transparency checks",
+    "steps": [
+        {"e":"✅","t":"All 10 checks pass",
+         "body":"""<div style='font-size:13px;color:#475569;line-height:1.7;margin-bottom:12px;'>Automated validation ensures the model is not a black box and produces calibrated outputs.</div>
+<div style='display:flex;flex-direction:column;gap:6px;'>
+<div class='ar' style='animation-delay:.05s;display:flex;align-items:center;gap:8px;padding:7px 12px;background:#dcfce7;border-radius:8px;'><span style='font-size:16px;'>📖</span><span style='font-size:12px;color:#166534;'>All formulas readable — not a black box</span></div>
+<div class='ar' style='animation-delay:.12s;display:flex;align-items:center;gap:8px;padding:7px 12px;background:#dcfce7;border-radius:8px;'><span style='font-size:16px;'>📈</span><span style='font-size:12px;color:#166534;'>Risk monotonicity: corr(risk, ENS) ≥ −0.3</span></div>
+<div class='ar' style='animation-delay:.19s;display:flex;align-items:center;gap:8px;padding:7px 12px;background:#dcfce7;border-radius:8px;'><span style='font-size:16px;'>🔄</span><span style='font-size:12px;color:#166534;'>Resilience inverse: corr(risk, res) ≤ 0.4</span></div>
+<div class='ar' style='animation-delay:.26s;display:flex;align-items:center;gap:8px;padding:7px 12px;background:#dcfce7;border-radius:8px;'><span style='font-size:16px;'>💷</span><span style='font-size:12px;color:#166534;'>Financial loss present + quantified</span></div>
+<div class='ar' style='animation-delay:.33s;display:flex;align-items:center;gap:8px;padding:7px 12px;background:#dcfce7;border-radius:8px;'><span style='font-size:16px;'>🏘️</span><span style='font-size:12px;color:#166534;'>Social vulnerability integrated (IoD2025)</span></div>
+<div class='ar' style='animation-delay:.4s;display:flex;align-items:center;gap:8px;padding:7px 12px;background:#dcfce7;border-radius:8px;'><span style='font-size:16px;'>🌪️</span><span style='font-size:12px;color:#166534;'>5 hazard types — all non-zero variance</span></div>
+<div class='ar' style='animation-delay:.47s;display:flex;align-items:center;gap:8px;padding:7px 12px;background:#dcfce7;border-radius:8px;'><span style='font-size:16px;'>🔁</span><span style='font-size:12px;color:#166534;'>No circular compound hazard feedback</span></div>
+<div class='ar' style='animation-delay:.54s;display:flex;align-items:center;gap:8px;padding:7px 12px;background:#dcfce7;border-radius:8px;'><span style='font-size:16px;'>📏</span><span style='font-size:12px;color:#166534;'>Grid failure &lt;10% in live mode ✓ RIIO-ED2</span></div>
+<div class='ar' style='animation-delay:.61s;display:flex;align-items:center;gap:8px;padding:7px 12px;background:#dcfce7;border-radius:8px;'><span style='font-size:16px;'>📊</span><span style='font-size:12px;color:#166534;'>CVaR95 = exceedance-mean (correct ✓)</span></div>
+<div class='ar' style='animation-delay:.68s;display:flex;align-items:center;gap:8px;padding:7px 12px;background:#dcfce7;border-radius:8px;'><span style='font-size:16px;'>🚗</span><span style='font-size:12px;color:#166534;'>EV/V2G coverage present</span></div>
+</div>""",
+         "viz":"<svg viewBox='0 0 180 160' style='width:100%;max-width:180px;'><circle cx='90' cy='70' r='58' fill='#dcfce7' stroke='#86efac' stroke-width='2' class='ap' style='animation-delay:.1s;'/><text x='90' y='60' text-anchor='middle' font-size='36' font-family='sans-serif' class='af' style='animation-delay:.3s;'>✅</text><text x='90' y='88' text-anchor='middle' font-size='14' font-weight='700' fill='#15803d' font-family='sans-serif' class='af' style='animation-delay:.4s;'>10 / 10</text><text x='90' y='104' text-anchor='middle' font-size='11' fill='#166534' font-family='sans-serif' class='af' style='animation-delay:.45s;'>checks pass</text><text x='90' y='148' text-anchor='middle' font-size='10' fill='#94a3b8' font-family='sans-serif'>Non-black-box standard ✓</text></svg>"},
+    ]
+},
 
-    "mc": [
-        {"title": "Shared storm shock variable",
-         "color": "#7F77DD",
-         "formula": "shock = numpy.random.normal(0, 1, n_simulations)  →  ONE shared draw per simulation",
-         "explain": "The key innovation: a single standard-normal random draw (shock) is shared across all weather variables in the same simulation. This creates realistic correlation — in a storm, wind AND rain AND outages all intensify together. Without this shared shock, independent sampling would underestimate tail risk by approximately 35%."},
-        {"title": "Correlated variable generation",
-         "color": "#378ADD",
-         "formula": "wind = base_wind × exp(0.16×shock + noise);  rain = base_rain × exp(0.28×shock + noise)",
-         "explain": "Wind and rain are generated as log-normal perturbations of their base values, driven by the shared shock. Coefficient 0.16 for wind (moderate storm correlation), 0.28 for rain (higher correlation — rain events are more concentrated). ENS is amplified by max(shock,0) — only positive shocks (storms) increase ENS, not negative ones."},
-        {"title": "Risk and failure per simulation",
-         "color": "#e67e22",
-         "formula": "risk = 27×(wind/45) + 18×(rain/6) + 17×(AQI/100) + 20×(outage/10) + 17×(ENS/1500);  fail = 1/(1+exp(−0.07×(risk−58)))",
-         "explain": "Each simulation produces a risk score using the same 5-layer formula as the main model. The failure probability uses a logistic with inflection at risk=58 — more sensitive than the main model's calm-mode logistic, appropriate for the MC's exploratory range. At P95 risk=58.7: failure≈50%. Average across all sims → mean failure 39.8%."},
-        {"title": "Financial loss with lognormal tails",
-         "color": "#c0392b",
-         "formula": "voll = ENS_MWh × LogNormal(ln(17000), σ=0.18);  restoration = faults × LogNormal(ln(18500), σ=0.25)",
-         "explain": "Financial losses use log-normal distributions (not fixed point estimates). σ=0.18 for VoLL captures uncertainty in the £17,000/MWh rate. σ=0.25 for restoration costs captures the wide range of real fault costs (£8k–£35k). The heavy right tail of the log-normal distribution is why CVaR95 >> mean loss."},
-        {"title": "P95 and CVaR95 calculation",
-         "color": "#185FA5",
-         "formula": "P95_risk = percentile(risk_array, 95);  CVaR95 = mean(loss_array[loss_array >= percentile(loss_array, 95)])",
-         "explain": "P95 risk (58.7 for Newcastle) is the 950th-highest risk score in 1,000 simulations. CVaR95 (£161.76m) is the average loss in the worst 50 simulations — not the worst single value. This is the correct exceedance-mean formula. A previous version used array slicing which gave wrong results due to floating-point index truncation."},
-    ],
+"method": {
+    "title": "Model equations + calibration",
+    "steps": [
+        {"e":"🔬","t":"All 8 core equations",
+         "body":"""<div style='font-size:13px;color:#475569;line-height:1.7;margin-bottom:12px;'>Every coefficient traces to a named published source. No black-box tuning.</div>
+<div style='display:flex;flex-direction:column;gap:7px;'>
+<div class='ar' style='animation-delay:.05s;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:8px 12px;'><span style='font-size:10px;color:#1d4ed8;font-weight:700;'>⚡ RISK</span><br><span style='font-size:10px;color:#1e40af;font-family:monospace;'>weather+pollution+load+outage+ENS [cap 100]</span></div>
+<div class='ar' style='animation-delay:.15s;background:#f5f3ff;border:1px solid #c4b5fd;border-radius:8px;padding:8px 12px;'><span style='font-size:10px;color:#6d28d9;font-weight:700;'>🔮 GRID FAILURE</span><br><span style='font-size:10px;color:#7c3aed;font-family:monospace;'>two-regime logistic, calm: max 4.5%</span></div>
+<div class='ar' style='animation-delay:.25s;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:8px 12px;'><span style='font-size:10px;color:#166534;font-weight:700;'>🛡️ RESILIENCE</span><br><span style='font-size:10px;color:#15803d;font-family:monospace;'>92 − 0.28r − 0.11s − 9gf − 5rf − 7ss</span></div>
+<div class='ar' style='animation-delay:.35s;background:#fbeaf0;border:1px solid #f4c0d1;border-radius:8px;padding:8px 12px;'><span style='font-size:10px;color:#881337;font-weight:700;'>🏘️ SOCIAL VULN</span><br><span style='font-size:10px;color:#9f1239;font-family:monospace;'>0.70×IoD2025 + 0.30×(density+IMD)</span></div>
+<div class='ar' style='animation-delay:.45s;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:8px 12px;'><span style='font-size:10px;color:#a16207;font-weight:700;'>💰 FINANCIAL LOSS</span><br><span style='font-size:10px;color:#92400e;font-family:monospace;'>VoLL+cust+biz+rest+crit × mult</span></div>
+<div class='ar' style='animation-delay:.55s;background:#fee2e2;border:1px solid #fca5a5;border-radius:8px;padding:8px 12px;'><span style='font-size:10px;color:#991b1b;font-weight:700;'>📊 CVaR95</span><br><span style='font-size:10px;color:#b91c1c;font-family:monospace;'>mean(loss[loss ≥ P95])  ← correct</span></div>
+</div>""",
+         "viz":"<svg viewBox='0 0 180 160' style='width:100%;max-width:180px;'><text x='90' y='16' text-anchor='middle' font-size='11' font-weight='600' fill='#64748b' font-family='sans-serif'>📚 Evidence sources</text><rect x='10' y='24' width='160' height='22' rx='5' fill='#eff6ff' stroke='#bfdbfe' class='ap' style='animation-delay:.05s;'/><text x='90' y='39' text-anchor='middle' font-size='10' fill='#1d4ed8' font-family='sans-serif' class='af' style='animation-delay:.07s;'>📘 BEIS 2019 — VoLL £17,000/MWh</text><rect x='10' y='50' width='160' height='22' rx='5' fill='#f0fdf4' stroke='#bbf7d0' class='ap' style='animation-delay:.2s;'/><text x='90' y='65' text-anchor='middle' font-size='10' fill='#166534' font-family='sans-serif' class='af' style='animation-delay:.22s;'>📗 Ofgem RIIO-ED2 — grid calibration</text><rect x='10' y='76' width='160' height='22' rx='5' fill='#fbeaf0' stroke='#f4c0d1' class='ap' style='animation-delay:.35s;'/><text x='90' y='91' text-anchor='middle' font-size='10' fill='#9f1239' font-family='sans-serif' class='af' style='animation-delay:.37s;'>📕 RAEng 2014 — customer cost £48</text><rect x='10' y='102' width='160' height='22' rx='5' fill='#fffbeb' stroke='#fde68a' class='ap' style='animation-delay:.5s;'/><text x='90' y='117' text-anchor='middle' font-size='10' fill='#92400e' font-family='sans-serif' class='af' style='animation-delay:.52s;'>📙 CBI 2011 — business disruption</text><rect x='10' y='128' width='160' height='22' rx='5' fill='#f5f3ff' stroke='#c4b5fd' class='ap' style='animation-delay:.65s;'/><text x='90' y='143' text-anchor='middle' font-size='10' fill='#6d28d9' font-family='sans-serif' class='af' style='animation-delay:.67s;'>📓 NPg RIIO-ED2 — restoration £18,500</text></svg>"},
+    ]
+},
 
-    "validation": [
-        {"title": "Check 1–3: Transparency + monotonicity",
-         "color": "#27ae60",
-         "formula": "transparency: all formulas readable; corr(risk, ENS) test; corr(risk, resilience) test",
-         "explain": "The first three checks verify that (1) the model is not a black box — all formulas must be in the code and README, (2) risk increases with ENS (correlation ≥ −0.3), and (3) resilience decreases as risk increases (correlation ≤ +0.4). These are sanity checks that catch formula sign errors and accidental inversions."},
-        {"title": "Check 4–6: Quantification + social + hazards",
-         "color": "#185FA5",
-         "formula": "financial loss present; IoD2025 matched; 5 hazard types each with >0 variance",
-         "explain": "Checks 4–6 verify that financial loss is quantified (not just risk scores), that social vulnerability data is integrated (not zero), and that all 5 hazard types produce varying outputs. A hazard that always returns the same value would indicate a broken stressor formula."},
-        {"title": "Check 7–8: No circular feedback + grid realism",
-         "color": "#e67e22",
-         "formula": "compound_hazard uses only wind/rain/AQI/outage inputs (not itself);  mean(grid_failure) < 0.10",
-         "explain": "Check 7 verifies the compound hazard stressor does not feed back into itself (which would create a circular dependency causing infinite escalation). Check 8 verifies the mean grid failure probability is below 10% in live mode — consistent with Ofgem RIIO-ED2 Customer Interruptions statistics."},
-        {"title": "Check 9–10: CVaR95 + EV/V2G coverage",
-         "color": "#7F77DD",
-         "formula": "CVaR95 > P95_loss (by definition);  EV_data present in places DataFrame",
-         "explain": "Check 9 verifies CVaR95 > P95 loss (by definition, the conditional expectation of the tail must exceed the threshold). If this fails, the CVaR formula has a bug. Check 10 verifies EV/V2G data is integrated — required for completeness of the digital twin scope. All 10 checks pass under normal live conditions."},
-    ],
+"map": {
+    "title": "Grid intelligence map",
+    "steps": [
+        {"e":"🗺️","t":"Real postcode boundary pipeline",
+         "body":"""<div style='font-size:13px;color:#475569;line-height:1.7;margin-bottom:12px;'>Real UK postcode district boundaries fetched from public GeoJSON. Each district coloured by IDW-interpolated risk.</div>
+<div style='display:flex;flex-direction:column;gap:7px;'>
+<div class='ar' style='animation-delay:.05s;display:flex;align-items:center;gap:10px;padding:9px 13px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:9px;'><span style='font-size:20px;'>📡</span><span style='flex:1;font-size:12px;color:#1d4ed8;font-weight:500;'>Fetch GeoJSON — missinglink/uk-postcode-polygons</span></div>
+<div class='ar' style='animation-delay:.2s;display:flex;align-items:center;gap:10px;padding:9px 13px;background:#f5f3ff;border:1px solid #c4b5fd;border-radius:9px;'><span style='font-size:20px;'>📐</span><span style='flex:1;font-size:12px;color:#6d28d9;font-weight:500;'>Calculate centroid per district (mean coords)</span></div>
+<div class='ar' style='animation-delay:.35s;display:flex;align-items:center;gap:10px;padding:9px 13px;background:#fffbeb;border:1px solid #fde68a;border-radius:9px;'><span style='font-size:20px;'>🧮</span><span style='flex:1;font-size:12px;color:#92400e;font-weight:500;'>IDW: risk = Σ(place_risk/d²) / Σ(1/d²)</span></div>
+<div class='ar' style='animation-delay:.5s;display:flex;align-items:center;gap:10px;padding:9px 13px;background:#fbeaf0;border:1px solid #f4c0d1;border-radius:9px;'><span style='font-size:20px;'>🎨</span><span style='flex:1;font-size:12px;color:#881337;font-weight:500;'>8-stop pastel gradient: blue→green→orange→purple</span></div>
+<div class='ar' style='animation-delay:.65s;display:flex;align-items:center;gap:10px;padding:9px 13px;background:#dcfce7;border:1px solid #86efac;border-radius:9px;'><span style='font-size:20px;'>🗺️</span><span style='flex:1;font-size:12px;color:#166534;font-weight:500;'>39 unique tones across 59 NE districts</span></div>
+</div>""",
+         "viz":"<svg viewBox='0 0 180 180' style='width:100%;max-width:180px;'><text x='90' y='16' text-anchor='middle' font-size='11' font-weight='600' fill='#64748b' font-family='sans-serif'>Colour gradient</text><defs><linearGradient id='mg' x1='0' y1='0' x2='1' y2='0'><stop offset='0%' stop-color='#b3e5fc'/><stop offset='20%' stop-color='#c8e6c9'/><stop offset='35%' stop-color='#fff9c4'/><stop offset='50%' stop-color='#ffe0b2'/><stop offset='65%' stop-color='#ffccbc'/><stop offset='80%' stop-color='#f8bbd0'/><stop offset='100%' stop-color='#d1c4e9'/></defs><rect x='10' y='28' width='160' height='20' rx='4' fill='url(#mg)' stroke='#e2e8f0' stroke-width='0.5' class='af' style='animation-delay:.2s;'/><text x='10' y='62' font-size='9' fill='#94a3b8' font-family='sans-serif'>0 — low</text><text x='90' y='62' text-anchor='middle' font-size='9' fill='#94a3b8' font-family='sans-serif'>50 — mod</text><text x='168' y='62' text-anchor='end' font-size='9' fill='#94a3b8' font-family='sans-serif'>100</text><rect x='10' y='74' width='60' height='20' rx='5' fill='#b3e5fc' class='ap' style='animation-delay:.4s;'/><text x='40' y='88' text-anchor='middle' font-size='10' fill='#0277bd' font-family='sans-serif' class='af' style='animation-delay:.42s;'>🔵 NE3</text><rect x='75' y='74' width='60' height='20' rx='5' fill='#ffe0b2' class='ap' style='animation-delay:.55s;'/><text x='105' y='88' text-anchor='middle' font-size='10' fill='#e65100' font-family='sans-serif' class='af' style='animation-delay:.57s;'>🟠 SR4</text><rect x='10' y='100' width='45' height='20' rx='5' fill='#f8bbd0' class='ap' style='animation-delay:.7s;'/><text x='32' y='114' text-anchor='middle' font-size='10' fill='#880e4f' font-family='sans-serif' class='af' style='animation-delay:.72s;'>🔴 TS1</text><rect x='60' y='100' width='50' height='20' rx='5' fill='#c8e6c9' class='ap' style='animation-delay:.85s;'/><text x='85' y='114' text-anchor='middle' font-size='10' fill='#2e7d32' font-family='sans-serif' class='af' style='animation-delay:.87s;'>🟢 DH1</text><text x='90' y='160' text-anchor='middle' font-size='10' fill='#64748b' font-family='sans-serif'>39 unique tones · carto-positron</text></svg>"},
+    ]
+},
 
-    "method": [
-        {"title": "Core model: risk score",
-         "color": "#378ADD",
-         "formula": "risk = weather(max57) + pollution(max15) + net_load(max10) + outage(max16) + ENS(max14)  [cap 100]",
-         "explain": "The risk model is a linear weighted sum of 5 layers. Coefficients are set by engineering judgment about relative severity: weather dominates (57/100) because it is the primary physical driver of UK grid faults. Outage clustering (16/100) is the most direct observational evidence. All weights sum to 112 — the cap at 100 prevents simultaneous maxima from being unrealistic."},
-        {"title": "Calibration philosophy",
-         "color": "#7F77DD",
-         "formula": "Every coefficient traces to: BEIS 2019 | Ofgem RIIO-ED2 | RAEng 2014 | CBI 2011 | NPg 2023",
-         "explain": "No coefficient in the model is 'tuned to fit' without an external reference. VoLL=£17,000 is BEIS 2019. Grid failure intercept −4.45 is calibrated to Ofgem CI data. Restoration cost £18,500 is Northern Powergrid's RIIO-ED2 submission. The resilience base of 92 reflects Ofgem's SAIDI statistics showing UK customers average <1h interruption/year."},
-        {"title": "Limitations for operational use",
-         "color": "#e67e22",
-         "formula": "Not a licensed engineering tool. Replace with: Ofgem CNAIM + DNO asset records + RIIO-ED3 unit costs",
-         "explain": "For regulatory submissions (RIIO-ED3, Ofgem CNAIM), replace the proxy unit costs with: actual DNO asset health indices, measured SAIDI/SAIFI per feeder, Ofgem-approved VoLL by postcode sector, and actual restoration cost records from the asset management system. This model provides directional estimates and relative rankings, not absolute engineering assessments."},
-        {"title": "Academic references",
-         "color": "#185FA5",
-         "formula": "Panteli & Mancarella (2015) · Billinton & Allan (1996) · BEIS 2019 · Ofgem RIIO-ED2 · RAEng 2014",
-         "explain": "Key academic foundations: Panteli & Mancarella (2015) 'The grid: Stronger, bigger, smarter?' in IEEE Transactions on Power Systems — provides the cascade interdependency power-law model. Billinton & Allan (1996) 'Reliability Evaluation of Power Systems' — provides the logistic failure probability framework. BEIS 2019 VoLL study provides all financial unit rates."},
-    ],
+"simulation": {
+    "title": "BBC-style hazard animation",
+    "steps": [
+        {"e":"🎬","t":"6-layer canvas animation",
+         "body":"""<div style='font-size:13px;color:#475569;line-height:1.7;margin-bottom:12px;'>Six rendering passes build up the animated weather canvas at 60fps.</div>
+<div style='display:flex;flex-direction:column;gap:7px;'>
+<div class='ar' style='animation-delay:.05s;display:flex;align-items:center;gap:10px;padding:9px 13px;background:#1e293b;border-radius:9px;'><span style='font-size:18px;'>🌌</span><span style='flex:1;font-size:12px;color:#94a3b8;font-weight:500;'>Layer 1 — backdrop + grid lines</span><span style='background:#334155;color:#94a3b8;font-size:10px;padding:2px 8px;border-radius:8px;'>z=1</span></div>
+<div class='ar' style='animation-delay:.15s;display:flex;align-items:center;gap:10px;padding:9px 13px;background:#1e3a5f;border-radius:9px;'><span style='font-size:18px;'>🌀</span><span style='flex:1;font-size:12px;color:#7dd3fc;font-weight:500;'>Layer 2 — pressure isobar contours</span><span style='background:#1e40af;color:#93c5fd;font-size:10px;padding:2px 8px;border-radius:8px;'>z=2</span></div>
+<div class='ar' style='animation-delay:.25s;display:flex;align-items:center;gap:10px;padding:9px 13px;background:#14532d;border-radius:9px;'><span style='font-size:18px;'>🌧️</span><span style='flex:1;font-size:12px;color:#86efac;font-weight:500;'>Layer 3 — rain bands + cloud patches</span><span style='background:#166534;color:#a7f3d0;font-size:10px;padding:2px 8px;border-radius:8px;'>z=3</span></div>
+<div class='ar' style='animation-delay:.35s;display:flex;align-items:center;gap:10px;padding:9px 13px;background:#4a1d96;border-radius:9px;'><span style='font-size:18px;'>🌡️</span><span style='flex:1;font-size:12px;color:#d8b4fe;font-weight:500;'>Layer 4 — warm/cold fronts</span><span style='background:#6d28d9;color:#e9d5ff;font-size:10px;padding:2px 8px;border-radius:8px;'>z=4</span></div>
+<div class='ar' style='animation-delay:.45s;display:flex;align-items:center;gap:10px;padding:9px 13px;background:#713f12;border-radius:9px;'><span style='font-size:18px;'>💨</span><span style='flex:1;font-size:12px;color:#fde68a;font-weight:500;'>Layer 5 — 155 animated wind arrows</span><span style='background:#92400e;color:#fcd34d;font-size:10px;padding:2px 8px;border-radius:8px;'>z=5</span></div>
+<div class='ar' style='animation-delay:.55s;display:flex;align-items:center;gap:10px;padding:9px 13px;background:#0c4a6e;border-radius:9px;'><span style='font-size:18px;'>🏙️</span><span style='flex:1;font-size:12px;color:#bae6fd;font-weight:500;'>Layer 6 — city labels (DOM overlay)</span><span style='background:#075985;color:#7dd3fc;font-size:10px;padding:2px 8px;border-radius:8px;'>z=6</span></div>
+</div>""",
+         "viz":"<svg viewBox='0 0 180 170' style='width:100%;max-width:180px;'><rect x='10' y='10' width='160' height='140' rx='8' fill='#0f172a'/><rect x='10' y='10' width='160' height='28' rx='8' fill='#1e293b'/><text x='90' y='28' text-anchor='middle' font-size='11' fill='#94a3b8' font-family='sans-serif'>🌌 Backdrop</text><rect x='10' y='36' width='160' height='22' fill='#1e3a5f'/><text x='90' y='51' text-anchor='middle' font-size='11' fill='#7dd3fc' font-family='sans-serif'>🌀 Pressure isobars</text><rect x='10' y='56' width='160' height='22' fill='#14532d'/><text x='90' y='71' text-anchor='middle' font-size='11' fill='#86efac' font-family='sans-serif'>🌧️ Rain + clouds</text><rect x='10' y='76' width='160' height='22' fill='#4a1d96'/><text x='90' y='91' text-anchor='middle' font-size='11' fill='#d8b4fe' font-family='sans-serif'>🌡️ Fronts</text><rect x='10' y='96' width='160' height='22' fill='#713f12'/><text x='90' y='111' text-anchor='middle' font-size='11' fill='#fde68a' font-family='sans-serif'>💨 155 wind arrows</text><rect x='10' y='116' width='160' height='22' rx='0' fill='#0c4a6e'/><text x='90' y='131' text-anchor='middle' font-size='11' fill='#bae6fd' font-family='sans-serif'>🏙️ City labels</text><text x='90' y='162' text-anchor='middle' font-size='10' fill='#94a3b8' font-family='sans-serif'>60fps · requestAnimationFrame</text></svg>"},
+    ]
+},
 
-    "readme": [
-        {"title": "Documentation structure",
-         "color": "#555",
-         "formula": "9 sections: Overview → Tabs → Key fixes → Equations → Data → Scenarios → Limitations → Assembly → References",
-         "explain": "The README is embedded directly in the application to ensure version consistency — the documentation cannot become out of date relative to the code. It serves simultaneously as the academic paper's methods section, the regulatory submission's technical appendix, and the deployment guide."},
-        {"title": "6 critical fixes applied",
-         "color": "#c0392b",
-         "formula": "grid_failure calibration · spatial map GeoJSON · CVaR95 formula · no circular compound · flood_depth · duplicate functions",
-         "explain": "Six significant bugs were identified and fixed during development: (1) grid failure probability was 6.9% in calm weather — now 0.3–1.5%. (2) Spatial map used hand-drawn polygons — now uses real postcode GeoJSON. (3) CVaR95 used array slicing — now uses correct exceedance mean. (4) Compound hazard used its own output as input — fixed. (5) flood_depth_proxy was not written to DataFrame — fixed. (6) clamp() defined twice — fixed."},
-        {"title": "Deployment instructions",
-         "color": "#27ae60",
-         "formula": "pip install streamlit pandas numpy requests openpyxl pydeck plotly;  streamlit run app.py",
-         "explain": "The application is a single Python file (~11,000 lines) deployable on Streamlit Cloud with no database or external services beyond the Open-Meteo and Northern Powergrid public APIs. IoD2025 files should be placed in data/iod2025/ for full social vulnerability matching. Without them, the proxy formula activates automatically."},
-    ],
+"export": {
+    "title": "Data export + reproducibility",
+    "steps": [
+        {"e":"📥","t":"5 CSV output files",
+         "body":"""<div style='font-size:13px;color:#475569;line-height:1.7;margin-bottom:12px;'>All model outputs downloadable as CSV for independent verification and regulatory submission.</div>
+<div style='display:flex;flex-direction:column;gap:7px;'>
+<div class='ar' style='animation-delay:.05s;display:flex;align-items:center;gap:10px;padding:9px 13px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:9px;'><span style='font-size:20px;'>📍</span><span style='flex:1;font-size:12px;color:#1d4ed8;'>sat_guard_places.csv — all risk/resilience/MC outputs per city</span></div>
+<div class='ar' style='animation-delay:.15s;display:flex;align-items:center;gap:10px;padding:9px 13px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:9px;'><span style='font-size:20px;'>📮</span><span style='flex:1;font-size:12px;color:#166534;'>sat_guard_postcodes.csv — 106 district resilience + costs</span></div>
+<div class='ar' style='animation-delay:.25s;display:flex;align-items:center;gap:10px;padding:9px 13px;background:#fffbeb;border:1px solid #fde68a;border-radius:9px;'><span style='font-size:20px;'>🎯</span><span style='flex:1;font-size:12px;color:#92400e;'>sat_guard_recommendations.csv — actions + BCR notes</span></div>
+<div class='ar' style='animation-delay:.35s;display:flex;align-items:center;gap:10px;padding:9px 13px;background:#fbeaf0;border:1px solid #f4c0d1;border-radius:9px;'><span style='font-size:20px;'>🔴</span><span style='flex:1;font-size:12px;color:#881337;'>sat_guard_outages.csv — NPG live records + synthetic flag</span></div>
+<div class='ar' style='animation-delay:.45s;display:flex;align-items:center;gap:10px;padding:9px 13px;background:#f5f3ff;border:1px solid #c4b5fd;border-radius:9px;'><span style='font-size:20px;'>🗺️</span><span style='flex:1;font-size:12px;color:#6d28d9;'>sat_guard_grid.csv — 15×15=225 IDW interpolated cells</span></div>
+</div>
+<div class='af' style='animation-delay:.65s;background:#dcfce7;border:1px solid #86efac;border-radius:9px;padding:9px 13px;margin-top:10px;font-size:11px;color:#166534;'>✅ Deterministic for fixed scenario + seed — reproducible for regulatory audit</div>""",
+         "viz":"<svg viewBox='0 0 180 180' style='width:100%;max-width:180px;'><rect x='30' y='10' width='120' height='30' rx='8' fill='#0f172a' class='ap' style='animation-delay:.1s;'/><text x='90' y='29' text-anchor='middle' font-size='11' font-weight='600' fill='#fff' font-family='sans-serif' class='af' style='animation-delay:.12s;'>SAT-Guard model</text><line x1='90' y1='40' x2='40' y2='65' stroke='#3b82f6' stroke-width='1.5' class='al' style='animation-delay:.3s;stroke-dasharray:40;stroke-dashoffset:40;'/><line x1='90' y1='40' x2='90' y2='65' stroke='#10b981' stroke-width='1.5' class='al' style='animation-delay:.4s;stroke-dasharray:28;stroke-dashoffset:28;'/><line x1='90' y1='40' x2='140' y2='65' stroke='#f59e0b' stroke-width='1.5' class='al' style='animation-delay:.5s;stroke-dasharray:40;stroke-dashoffset:40;'/><rect x='10' y='68' width='50' height='22' rx='5' fill='#eff6ff' stroke='#bfdbfe' class='ap' style='animation-delay:.35s;'/><text x='35' y='83' text-anchor='middle' font-size='9' fill='#1d4ed8' font-family='sans-serif' class='af' style='animation-delay:.37s;'>📍 places</text><rect x='65' y='68' width='50' height='22' rx='5' fill='#f0fdf4' stroke='#bbf7d0' class='ap' style='animation-delay:.45s;'/><text x='90' y='83' text-anchor='middle' font-size='9' fill='#166534' font-family='sans-serif' class='af' style='animation-delay:.47s;'>📮 postcodes</text><rect x='120' y='68' width='50' height='22' rx='5' fill='#fffbeb' stroke='#fde68a' class='ap' style='animation-delay:.55s;'/><text x='145' y='83' text-anchor='middle' font-size='9' fill='#92400e' font-family='sans-serif' class='af' style='animation-delay:.57s;'>🎯 recs</text><rect x='30' y='110' width='50' height='22' rx='5' fill='#fbeaf0' stroke='#f4c0d1' class='ap' style='animation-delay:.7s;'/><text x='55' y='125' text-anchor='middle' font-size='9' fill='#881337' font-family='sans-serif' class='af' style='animation-delay:.72s;'>🔴 outages</text><rect x='100' y='110' width='50' height='22' rx='5' fill='#f5f3ff' stroke='#c4b5fd' class='ap' style='animation-delay:.85s;'/><text x='125' y='125' text-anchor='middle' font-size='9' fill='#6d28d9' font-family='sans-serif' class='af' style='animation-delay:.87s;'>🗺️ grid</text><text x='90' y='168' text-anchor='middle' font-size='10' fill='#94a3b8' font-family='sans-serif'>5 CSV files · all intermediates included</text></svg>"},
+    ]
+},
 
-    "export": [
-        {"title": "places CSV — all model outputs",
-         "color": "#378ADD",
-         "formula": "sat_guard_places.csv: 1 row per configured place, ~40 columns",
-         "explain": "The places CSV contains every model output for each configured city: risk score (all 5 layer scores), grid failure probability (both regimes), resilience index, social vulnerability, ENS, financial loss (all 5 components), Monte Carlo P95/CVaR95, and all raw weather API values. This is the primary output for academic analysis."},
-        {"title": "postcodes + recommendations CSVs",
-         "color": "#1D9E75",
-         "formula": "sat_guard_postcodes.csv + sat_guard_recommendations.csv: 106 rows each",
-         "explain": "The postcodes CSV contains resilience scores, recommendation scores, investment priority bands and indicative costs for all 106 postcode districts. The recommendations CSV adds the specific recommended action text, BCR note and nearest configured place. These two files together constitute the investment case for a regulatory submission."},
-        {"title": "outages + grid CSVs",
-         "color": "#BA7517",
-         "formula": "sat_guard_outages.csv: live NPG records;  sat_guard_grid.csv: 15×15=225 IDW cells",
-         "explain": "The outages CSV exports the live Northern Powergrid records with an is_synthetic_outage flag (True = visual fallback, not a real fault). The grid CSV exports the 15×15 interpolation grid covering the region — 225 cells each with full risk, resilience and weather data. This enables GIS import and spatial analysis in external tools."},
-        {"title": "Reproducibility note",
-         "color": "#7F77DD",
-         "formula": "deterministic for fixed scenario + seed;  API results = snapshot at refresh time",
-         "explain": "Model outputs are deterministic for a given scenario, seed and input data. The only non-deterministic element is the weather API, which returns real-time data. To reproduce a specific run, export the CSV immediately after refresh and store alongside the scenario name and timestamp. Monte Carlo results use numpy's default_rng() — set a seed for exact reproduction."},
-    ],
+"readme": {
+    "title": "Technical documentation",
+    "steps": [
+        {"e":"📖","t":"9-section README",
+         "body":"""<div style='font-size:13px;color:#475569;line-height:1.7;margin-bottom:12px;'>2,000+ word self-contained documentation. Serves as methods section, data appendix and deployment guide simultaneously.</div>
+<div style='display:flex;flex-direction:column;gap:6px;'>
+<div class='ar' style='animation-delay:.05s;display:flex;align-items:center;gap:8px;padding:7px 12px;background:#eff6ff;border-radius:8px;'><span style='font-size:16px;'>📋</span><span style='font-size:12px;color:#1d4ed8;'>§1 Overview — what SAT-Guard does</span></div>
+<div class='ar' style='animation-delay:.12s;display:flex;align-items:center;gap:8px;padding:7px 12px;background:#f0fdf4;border-radius:8px;'><span style='font-size:16px;'>🗂️</span><span style='font-size:12px;color:#166534;'>§2 All 15 tabs described</span></div>
+<div class='ar' style='animation-delay:.19s;display:flex;align-items:center;gap:8px;padding:7px 12px;background:#fee2e2;border-radius:8px;'><span style='font-size:16px;'>🔧</span><span style='font-size:12px;color:#991b1b;'>§3 6 critical fixes applied</span></div>
+<div class='ar' style='animation-delay:.26s;display:flex;align-items:center;gap:8px;padding:7px 12px;background:#fffbeb;border-radius:8px;'><span style='font-size:16px;'>🧮</span><span style='font-size:12px;color:#92400e;'>§4 All equations with derivation</span></div>
+<div class='ar' style='animation-delay:.33s;display:flex;align-items:center;gap:8px;padding:7px 12px;background:#fbeaf0;border-radius:8px;'><span style='font-size:16px;'>📡</span><span style='font-size:12px;color:#881337;'>§5 Data sources (Open-Meteo, NPg, IoD)</span></div>
+<div class='ar' style='animation-delay:.4s;display:flex;align-items:center;gap:8px;padding:7px 12px;background:#f5f3ff;border-radius:8px;'><span style='font-size:16px;'>⛈️</span><span style='font-size:12px;color:#6d28d9;'>§6 Scenario calibration sources</span></div>
+<div class='ar' style='animation-delay:.47s;display:flex;align-items:center;gap:8px;padding:7px 12px;background:#e0f2fe;border-radius:8px;'><span style='font-size:16px;'>⚠️</span><span style='font-size:12px;color:#0369a1;'>§7 Limitations for operational use</span></div>
+<div class='ar' style='animation-delay:.54s;display:flex;align-items:center;gap:8px;padding:7px 12px;background:#f0fdf4;border-radius:8px;'><span style='font-size:16px;'>🚀</span><span style='font-size:12px;color:#166534;'>§8 Assembly + deployment</span></div>
+<div class='ar' style='animation-delay:.61s;display:flex;align-items:center;gap:8px;padding:7px 12px;background:#fbeaf0;border-radius:8px;'><span style='font-size:16px;'>📚</span><span style='font-size:12px;color:#881337;'>§9 10 academic references</span></div>
+</div>""",
+         "viz":"<svg viewBox='0 0 180 160' style='width:100%;max-width:180px;'><rect x='20' y='10' width='140' height='120' rx='10' fill='#f8fafc' stroke='#e2e8f0' stroke-width='1'/><rect x='30' y='20' width='120' height='12' rx='3' fill='#3b82f6' class='af' style='animation-delay:.1s;'/><rect x='30' y='36' width='100' height='8' rx='3' fill='#e2e8f0' class='af' style='animation-delay:.15s;'/><rect x='30' y='48' width='110' height='8' rx='3' fill='#e2e8f0' class='af' style='animation-delay:.2s;'/><rect x='30' y='60' width='90' height='8' rx='3' fill='#e2e8f0' class='af' style='animation-delay:.25s;'/><rect x='30' y='72' width='120' height='8' rx='3' fill='#e2e8f0' class='af' style='animation-delay:.3s;'/><rect x='30' y='84' width='80' height='8' rx='3' fill='#e2e8f0' class='af' style='animation-delay:.35s;'/><rect x='30' y='96' width='105' height='8' rx='3' fill='#e2e8f0' class='af' style='animation-delay:.4s;'/><rect x='30' y='108' width='70' height='8' rx='3' fill='#e2e8f0' class='af' style='animation-delay:.45s;'/><text x='90' y='152' text-anchor='middle' font-size='10' fill='#94a3b8' font-family='sans-serif'>2,000+ words · self-contained</text></svg>"},
+    ]
+},
 }
 
 
-def _wrap_svg_clickable(svg_html: str, tab_key: str) -> str:
+def _render_tab_stepper(tab_key: str) -> None:
     """
-    Wrap an SVG string in a clickable container that opens the step modal.
+    Render the animated step-through figure for a tab brief.
 
-    The SVG gets a hover ring and a 'click to explore' pill.
-    Clicking calls openFigureModal(tab_key) which is defined in the
-    modal JS injected by render_tab_brief().
+    Full-width animated panel with:
+    - Dark header with emoji + title
+    - Step counter + dot nav
+    - Two-column layout (left: text+emoji, right: SVG)
+    - CSS enter animations (fadeUp, slideRight, popIn, drawLine)
+    - Progress bar
+    - Prev/Next buttons
     """
-    return (
-        f"<div style='position:relative;cursor:pointer;display:inline-block;width:100%;'"
-        f" onclick=\"openFigureModal('{tab_key}')\" title='Click to explore step by step'>"
-        f"{svg_html}"
-        f"<div style='position:absolute;bottom:8px;right:8px;"
-        f"background:rgba(127,119,221,.92);color:#fff;font-size:10px;"
-        f"padding:3px 9px;border-radius:20px;pointer-events:none;"
-        f"font-family:sans-serif;font-weight:500;'>▶ Click to explore</div>"
-        f"<style>"
-        f"div:hover > svg{{outline:2px solid #7F77DD;outline-offset:2px;border-radius:10px;}}"
-        f"</style>"
-        f"</div>"
-    )
+    if tab_key not in _TAB_STEPPERS:
+        return
 
+    cfg    = _TAB_STEPPERS[tab_key]
+    title  = cfg["title"]
+    steps  = cfg["steps"]
+    n      = len(steps)
 
-def _modal_js_for_tab(tab_key: str) -> str:
-    """
-    Return the self-contained JS + HTML for the step-through modal.
-    Embeds the step data for this specific tab inline.
-    """
     import json as _json
-
-    steps = _FIGURE_STEPS.get(tab_key, [])
-    if not steps:
-        return ""
-
     steps_json = _json.dumps(steps)
-    n = len(steps)
 
-    return f"""
-<div id="fig-overlay" style="
-  display:none;position:fixed;inset:0;background:rgba(8,8,20,.78);
-  z-index:99999;align-items:center;justify-content:center;
-" onclick="handleFigOverlayClick(event)">
-
-  <div id="fig-modal" style="
-    background:#fff;border-radius:16px;
-    width:min(760px,95vw);max-height:90vh;
-    overflow:hidden;display:flex;flex-direction:column;
-    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-  ">
-
-    <!-- header -->
-    <div style="padding:13px 18px 10px;border-bottom:1px solid #eee;
-      display:flex;align-items:center;gap:10px;flex-shrink:0;">
-      <div id="fig-title" style="flex:1;font-size:14px;font-weight:600;color:#1a252f;"></div>
-      <button onclick="closeFigModal()" style="
-        width:28px;height:28px;border:1px solid #ddd;border-radius:8px;
-        background:#fff;cursor:pointer;font-size:15px;color:#666;
-        display:flex;align-items:center;justify-content:center;
-      ">✕</button>
+    html = f"""<!doctype html><html><head><meta charset='utf-8'>
+<style>
+@keyframes fadeUp{{from{{opacity:0;transform:translateY(14px)}}to{{opacity:1;transform:translateY(0)}}}}
+@keyframes slideR{{from{{opacity:0;transform:translateX(-10px)}}to{{opacity:1;transform:translateX(0)}}}}
+@keyframes popIn{{from{{opacity:0;transform:scale(.75)}}to{{opacity:1;transform:scale(1)}}}}
+@keyframes drawL{{from{{stroke-dashoffset:400}}to{{stroke-dashoffset:0}}}}
+*{{box-sizing:border-box;margin:0;padding:0;}}
+body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#fff;color:#1a252f;font-size:13px;overflow:visible;}}
+.sp{{display:none;animation:fadeUp .4s ease both;}}
+.sp.on{{display:grid;grid-template-columns:1fr 200px;gap:0;min-height:360px;}}
+.af{{opacity:0;animation:fadeUp .45s ease forwards;}}
+.ar{{opacity:0;animation:slideR .4s ease forwards;}}
+.ap{{opacity:0;animation:popIn .4s ease forwards;}}
+.al{{stroke-dasharray:400;stroke-dashoffset:400;animation:drawL .8s ease forwards;}}
+.lp{{padding:22px 22px;display:flex;flex-direction:column;gap:10px;}}
+.rp{{background:#f8fafc;display:flex;align-items:center;justify-content:center;padding:16px;border-left:1px solid #f0f0f0;}}
+</style>
+</head><body>
+<div style='background:#fff;border-radius:14px;border:1px solid #e5e7eb;overflow:hidden;'>
+  <div style='background:#0f172a;padding:14px 20px;display:flex;align-items:center;gap:12px;'>
+    <div style='font-size:26px;' id='he'>⚡</div>
+    <div>
+      <div style='font-size:9px;color:#64748b;letter-spacing:.1em;text-transform:uppercase;font-weight:600;'>SAT-Guard · {title}</div>
+      <div style='font-size:15px;font-weight:600;color:#f1f5f9;margin-top:1px;' id='ht'>{title}</div>
     </div>
-
-    <!-- dot nav + step counter -->
-    <div style="padding:9px 18px;border-bottom:1px solid #f0f0f0;
-      display:flex;align-items:center;gap:10px;flex-shrink:0;">
-      <div id="fig-dots" style="display:flex;gap:6px;align-items:center;"></div>
-      <div id="fig-counter" style="flex:1;font-size:11px;color:#aaa;margin-left:4px;"></div>
-      <button id="fig-prev" onclick="figPrev()" style="
-        padding:5px 13px;border-radius:8px;border:1px solid #ddd;
-        background:#fff;cursor:pointer;font-size:12px;font-weight:500;color:#444;">← Back</button>
-      <button id="fig-next" onclick="figNext()" style="
-        padding:5px 13px;border-radius:8px;border:1px solid #7F77DD;
-        background:#7F77DD;cursor:pointer;font-size:12px;font-weight:500;color:#fff;">Next →</button>
+    <div style='margin-left:auto;display:flex;gap:5px;align-items:center;' id='dr'></div>
+  </div>
+  <div style='display:flex;align-items:center;border-bottom:1px solid #f1f5f9;background:#f8fafc;'>
+    <div style='flex:1;padding:8px 18px;'>
+      <div style='font-size:9px;color:#94a3b8;font-weight:700;letter-spacing:.07em;text-transform:uppercase;margin-bottom:1px;' id='sl'>Step 1 of {n}</div>
+      <div style='font-size:13px;font-weight:600;color:#1e293b;' id='st'>Loading...</div>
     </div>
-
-    <!-- formula bar -->
-    <div id="fig-formula" style="
-      padding:9px 18px;background:#f0f4ff;
-      border-bottom:1px solid #e0e8ff;flex-shrink:0;
-      font-size:11px;font-family:'SF Mono',Menlo,Consolas,monospace;
-      color:#185FA5;line-height:1.5;
-    "></div>
-
-    <!-- explanation -->
-    <div id="fig-explain" style="
-      padding:14px 18px;font-size:12.5px;color:#333;
-      line-height:1.7;flex:1;overflow-y:auto;
-    "></div>
-
-    <!-- accent bar at bottom -->
-    <div id="fig-accent" style="height:4px;flex-shrink:0;transition:background .4s;"></div>
-
+    <div style='padding:7px 12px;display:flex;gap:6px;'>
+      <button id='bp' onclick='go(-1)' style='width:30px;height:30px;border-radius:7px;border:1px solid #e2e8f0;background:#fff;cursor:pointer;font-size:15px;color:#64748b;'>←</button>
+      <button id='bn' onclick='go(1)'  style='width:30px;height:30px;border-radius:7px;border:none;background:#6366f1;cursor:pointer;font-size:15px;color:#fff;'>→</button>
+    </div>
+  </div>
+  <div id='stage'></div>
+  <div style='padding:10px 20px;background:#f8fafc;border-top:1px solid #e2e8f0;display:flex;align-items:center;gap:10px;'>
+    <div style='flex:1;height:3px;background:#e2e8f0;border-radius:2px;overflow:hidden;'>
+      <div id='pg' style='height:100%;background:#6366f1;border-radius:2px;width:{round(100/n)}%;transition:width .3s;'></div>
+    </div>
+    <div style='font-size:10px;color:#94a3b8;' id='pt'>1 / {n}</div>
   </div>
 </div>
-
 <script>
-(function(){{
-  var STEPS = {steps_json};
-  var cur = 0;
-
-  function render(){{
-    var s = STEPS[cur];
-    document.getElementById('fig-title').textContent = s.title;
-    document.getElementById('fig-formula').textContent = s.formula;
-    document.getElementById('fig-explain').textContent = s.explain;
-    document.getElementById('fig-accent').style.background = s.color;
-    document.getElementById('fig-counter').textContent =
-      'Step ' + (cur+1) + ' of ' + STEPS.length;
-
-    // dots
-    var dots = '';
-    for(var i=0;i<STEPS.length;i++){{
-      var bg = i < cur ? '#c8e6c9' : i===cur ? STEPS[cur].color : '#e0e0e0';
-      var sz = i===cur ? '11px' : '7px';
-      dots += '<div onclick="figGo('+i+')" style="width:'+sz+';height:'+sz+';border-radius:50%;'
-        + 'background:'+bg+';cursor:pointer;transition:all .25s;flex-shrink:0;"></div>';
-    }}
-    document.getElementById('fig-dots').innerHTML = dots;
-
-    var prev = document.getElementById('fig-prev');
-    var next = document.getElementById('fig-next');
-    prev.disabled = cur===0;
-    prev.style.opacity = cur===0 ? '.3' : '1';
-    if(cur===STEPS.length-1){{
-      next.textContent = '✓ Close';
-      next.onclick = closeFigModal;
-    }} else {{
-      next.textContent = 'Next →';
-      next.onclick = figNext;
-    }}
+var STEPS={steps_json};
+var cur=0;
+function dots(){{
+  var h='';
+  for(var i=0;i<STEPS.length;i++){{
+    var a=i===cur;
+    h+='<div onclick="jump('+i+')" style="width:'+(a?'20px':'7px')+';height:7px;border-radius:4px;background:'+(i<cur?'#a5b4fc':a?'#6366f1':'#334155')+';cursor:pointer;transition:all .3s;"></div>';
   }}
-
-  window.openFigureModal = function(key){{
-    cur = 0;
-    render();
-    var ov = document.getElementById('fig-overlay');
-    ov.style.display = 'flex';
-  }};
-
-  window.closeFigModal = function(){{
-    document.getElementById('fig-overlay').style.display = 'none';
-  }};
-
-  window.handleFigOverlayClick = function(e){{
-    if(e.target===document.getElementById('fig-overlay')) closeFigModal();
-  }};
-
-  window.figNext = function(){{
-    if(cur < STEPS.length-1){{ cur++; render(); }}
-  }};
-
-  window.figPrev = function(){{
-    if(cur > 0){{ cur--; render(); }}
-  }};
-
-  window.figGo = function(i){{
-    cur = i; render();
-  }};
-}})();
+  document.getElementById('dr').innerHTML=h;
+}}
+function show(n2){{
+  var s=STEPS[n2];
+  document.getElementById('he').textContent=s.e;
+  document.getElementById('sl').textContent='Step '+(n2+1)+' of '+STEPS.length;
+  document.getElementById('st').textContent=s.e+' '+s.t;
+  document.getElementById('pg').style.width=Math.round((n2+1)/STEPS.length*100)+'%';
+  document.getElementById('pt').textContent=(n2+1)+' / '+STEPS.length;
+  document.getElementById('bp').style.opacity=n2===0?'.3':'1';
+  document.getElementById('bn').textContent=n2===STEPS.length-1?'✓':'→';
+  document.getElementById('stage').innerHTML="<div class='sp on' id='p"+n2+"'><div class='lp'>"+s.body+"</div><div class='rp'>"+s.viz+"</div></div>";
+  document.querySelectorAll('.af,.ar,.ap,.al').forEach(function(el){{
+    var d=el.style.animationDelay||'0s';
+    el.style.animation='none';el.offsetWidth;el.style.animation='';el.style.animationDelay=d;
+  }});
+  dots();
+}}
+function go(d){{var nx=Math.max(0,Math.min(STEPS.length-1,cur+d));if(nx!==cur){{cur=nx;show(cur);}}}}
+function jump(i){{cur=i;show(cur);}}
+show(0);
 </script>
-"""
+</body></html>"""
+    components.html(html, height=490, scrolling=False)
 
 
 
 def render_tab_brief(tab_key: str) -> None:
     """
-    Render an academic presentation brief using components.html.
-    The right-column figure is wrapped in a clickable container.
-    Clicking opens a full-panel step-by-step calculation modal.
+    Render the academic brief expander for a given tab.
+    The right-column figure is replaced by the full animated stepper.
     """
     BRIEFS = _get_briefs()
     if tab_key not in BRIEFS:
         return
-
     b = BRIEFS[tab_key]
-
     pills_html = " ".join(
-        f'<span class="pill">{p}</span>'
+        f'<span style="display:inline-block;font-size:11px;padding:2px 9px;border-radius:6px;'
+        f'margin:2px 3px 2px 0;font-weight:500;background:{b["tag_color"]};'
+        f'color:{b["tag_text_color"]};opacity:.85;border:1px solid rgba(0,0,0,.08);">{p}</span>'
         for p in b["pills"]
     )
-
-    accent  = b["tag_color"]
-    text_c  = b["tag_text_color"]
-
-    # Wrap SVG in clickable container + inject modal JS
-    visual        = _wrap_svg_clickable(b["svg_or_html"], tab_key)
-    modal_section = _modal_js_for_tab(tab_key)
-
-    html_code = (
+    accent = b["tag_color"]
+    tc     = b["tag_text_color"]
+    brief_html = (
         "<!doctype html><html><head><meta charset='utf-8'>"
-        "<style>"
-        "*{box-sizing:border-box;margin:0;padding:0;}"
+        "<style>*{box-sizing:border-box;margin:0;padding:0;}"
         "html,body{background:#fff;color:#1a252f;"
         "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;"
         "font-size:13px;overflow:visible;}"
-        f".hdr{{background:{accent};color:{text_c};"
-        "padding:9px 16px;display:flex;align-items:center;gap:10px;"
-        "font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;}}"
-        ".hdr .name{font-size:14px;font-weight:700;text-transform:none;letter-spacing:0;}"
-        ".hdr .meta{margin-left:auto;font-size:10px;font-weight:400;opacity:.6;text-transform:none;}"
-        ".body{padding:16px;display:grid;grid-template-columns:1fr 300px;gap:16px;align-items:start;}"
-        ".right svg{width:300px;height:auto;border-radius:8px;border:1px solid #f0f0f0;display:block;}"
-        ".sub{font-size:12px;color:#555;line-height:1.65;margin-bottom:12px;"
+        f".hdr{{background:{accent};color:{tc};padding:9px 16px;display:flex;"
+        "align-items:center;gap:10px;font-size:11px;font-weight:700;"
+        "letter-spacing:.05em;text-transform:uppercase;}}"
+        ".name{font-size:14px;font-weight:700;text-transform:none;letter-spacing:0;}"
+        ".meta{margin-left:auto;font-size:10px;font-weight:400;opacity:.6;text-transform:none;}"
+        ".body{padding:16px;}"
+        f".sub{{font-size:12px;color:#555;line-height:1.65;margin-bottom:12px;"
         f"border-left:3px solid {accent};padding-left:10px;}}"
         ".st{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;"
         "color:#bbb;margin-bottom:3px;margin-top:10px;}"
         ".sb{font-size:12px;color:#333;line-height:1.65;}"
         ".div{height:1px;background:#f0f0f0;margin:8px 0;}"
-        ".pills{margin-top:12px;}"
-        f".pill{{display:inline-block;font-size:11px;padding:2px 9px;border-radius:6px;"
-        f"margin:2px 3px 2px 0;font-weight:500;background:{accent};"
-        f"color:{text_c};opacity:.85;border:1px solid rgba(0,0,0,.08);}}"
         ".ref{font-size:10px;color:#aaa;margin-top:10px;line-height:1.6;"
         "background:#fafafa;border:1px solid #eee;border-radius:6px;padding:7px 10px;}"
         "</style></head><body>"
@@ -10917,8 +10863,7 @@ def render_tab_brief(tab_key: str) -> None:
         f"<span class='name'>{b['tab_name']}</span>"
         f"<span class='meta'>Academic brief</span>"
         f"</div>"
-        "<div class='body'>"
-        "<div class='left'>"
+        f"<div class='body'>"
         f"<div class='sub'>{b['subtitle']}</div>"
         "<div class='st'>What we did</div>"
         f"<div class='sb'>{b['what_did']}</div>"
@@ -10928,20 +10873,15 @@ def render_tab_brief(tab_key: str) -> None:
         "<div class='div'></div>"
         "<div class='st'>Why it matters</div>"
         f"<div class='sb'>{b['why_matters']}</div>"
-        f"<div class='pills'>{pills_html}</div>"
+        f"<div style='margin-top:12px;'>{pills_html}</div>"
         f"<div class='ref'>{b['refs']}</div>"
         "</div>"
-        f"<div class='right'>{visual}</div>"
-        "</div>"
-        f"{modal_section}"
         "</body></html>"
     )
-
-    with st.expander(
-        f"📋 Academic brief — {b['tab_name']}",
-        expanded=False,
-    ):
-        components.html(html_code, height=640, scrolling=True)
+    with st.expander(f"📋 Academic brief — {b['tab_name']}", expanded=False):
+        components.html(brief_html, height=460, scrolling=True)
+        st.markdown("**Step-by-step calculation:**")
+        _render_tab_stepper(tab_key)
 
 def render_readme_tab() -> None:
     """Render the full README documentation tab."""
