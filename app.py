@@ -10840,20 +10840,20 @@ def render_tab_brief(tab_key: str) -> None:
         "<style>*{box-sizing:border-box;margin:0;padding:0;}"
         "html,body{background:#fff;color:#1a252f;"
         "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;"
-        "font-size:13px;overflow:visible;}"
+        "font-size:15px;overflow:visible;}"
         f".hdr{{background:{accent};color:{tc};padding:9px 16px;display:flex;"
-        "align-items:center;gap:10px;font-size:11px;font-weight:700;"
+        "align-items:center;gap:10px;font-size:12px;font-weight:700;"
         "letter-spacing:.05em;text-transform:uppercase;}}"
-        ".name{font-size:14px;font-weight:700;text-transform:none;letter-spacing:0;}"
-        ".meta{margin-left:auto;font-size:10px;font-weight:400;opacity:.6;text-transform:none;}"
+        ".name{font-size:17px;font-weight:700;text-transform:none;letter-spacing:0;}"
+        ".meta{margin-left:auto;font-size:11px;font-weight:400;opacity:.6;text-transform:none;}"
         ".body{padding:16px;}"
-        f".sub{{font-size:12px;color:#555;line-height:1.65;margin-bottom:12px;"
+        f".sub{{font-size:15px;color:#555;line-height:1.7;margin-bottom:14px;"
         f"border-left:3px solid {accent};padding-left:10px;}}"
-        ".st{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;"
+        ".st{font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;"
         "color:#bbb;margin-bottom:3px;margin-top:10px;}"
-        ".sb{font-size:12px;color:#333;line-height:1.65;}"
+        ".sb{font-size:15px;color:#333;line-height:1.7;}"
         ".div{height:1px;background:#f0f0f0;margin:8px 0;}"
-        ".ref{font-size:10px;color:#aaa;margin-top:10px;line-height:1.6;"
+        ".ref{font-size:12px;color:#aaa;margin-top:10px;line-height:1.6;"
         "background:#fafafa;border:1px solid #eee;border-radius:6px;padding:7px 10px;}"
         "</style></head><body>"
         f"<div class='hdr'>"
@@ -10879,7 +10879,7 @@ def render_tab_brief(tab_key: str) -> None:
         "</body></html>"
     )
     with st.expander(f"📋 Academic brief — {b['tab_name']}", expanded=False):
-        components.html(brief_html, height=460, scrolling=True)
+        components.html(brief_html, height=560, scrolling=True)
         st.markdown("**Step-by-step calculation:**")
         _render_tab_stepper(tab_key)
 
