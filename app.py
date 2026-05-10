@@ -621,6 +621,7 @@ def enhanced_failure_probability(
     aqi_n = clamp(aqi / 150, 0, 1)
 
     cold_n = clamp((6 - temp) / 12, 0, 1)
+    cold_weather = temp < 6.0
 
     risk_n = clamp(risk / 100, 0, 1)
 
@@ -5176,85 +5177,190 @@ UK_ATLAS_REGION_COLOURS = {
 }
 
 
+
+def _svg_hexagon_points(cx: float, cy: float, radius: float) -> str:
+    """Return SVG polygon points for a flat-top hexagon."""
+    pts = []
+    for angle in [0, 60, 120, 180, 240, 300]:
+        rad = math.radians(angle)
+        pts.append(f"{cx + radius * math.cos(rad):.2f},{cy + radius * math.sin(rad):.2f}")
+    return " ".join(pts)
+
+
+def _uk_hex_region_colour(label: str) -> str:
+    """Bloomberg-style categorical colour palette for UK hex-cartogram regions."""
+    palette = {
+        "scotland_core": "#ffc400",
+        "scotland_coast": "#1296d4",
+        "northern_ireland": "#009b2f",
+        "northern_ireland_red": "#f40046",
+        "england_blue": "#0097cf",
+        "england_red": "#f40046",
+        "wales_green": "#87f5a0",
+        "wales_red": "#f40046",
+        "orange": "#ff8b45",
+        "missing": "#efefef",
+    }
+    return palette.get(label, "#0097cf")
+
+
+def _build_uk_hex_cartogram_cells(active_region: str) -> List[Dict[str, Any]]:
+    """Build a clean UK hex-cartogram similar to the supplied Bloomberg-style reference."""
+    cells: List[Dict[str, Any]] = []
+    radius = 12.0
+    dx = radius * 1.52
+    dy = radius * 1.72
+
+    # Scotland: tall yellow/blue mass
+    scotland_rows = [
+        (120, 3, 0), (142, 5, -1), (164, 6, -1), (186, 7, 0), (208, 7, 0),
+        (230, 6, 0), (252, 7, 0), (274, 6, 1), (296, 5, 1), (318, 4, 1),
+    ]
+    for y, count, offset in scotland_rows:
+        for i in range(count):
+            x = 420 + (i - count / 2) * dx + offset * 8 + (y % 44) * 0.25
+            label = "scotland_core"
+            if i in {0, count - 1} and y in {142, 164, 186, 252, 274}:
+                label = "scotland_coast"
+            if y in {120, 142} and i == count - 1:
+                label = "orange"
+            if y == 296 and i == count - 1:
+                label = "england_red"
+            cells.append({"x": x, "y": y, "colour": _uk_hex_region_colour(label), "group": "Scotland"})
+
+    # Northern Ireland: small island to the west
+    ni_rows = [(420, 3, 0), (442, 4, 0), (464, 3, 0), (486, 4, 0), (508, 3, 0)]
+    for y, count, offset in ni_rows:
+        for i in range(count):
+            x = 245 + (i - count / 2) * dx + offset * 8
+            lab = "northern_ireland" if (i + int(y)) % 3 else "northern_ireland_red"
+            if i == 0 and y in {442, 508}:
+                lab = "missing"
+            cells.append({"x": x, "y": y, "colour": _uk_hex_region_colour(lab), "group": "Northern Ireland"})
+
+    # England and Wales: large tapered body
+    england_rows = [
+        (340, 5, 0), (362, 8, 0), (384, 10, 0), (406, 12, 0), (428, 13, 0),
+        (450, 14, 0), (472, 15, 0), (494, 16, 0), (516, 15, 0), (538, 16, 0),
+        (560, 16, 0), (582, 15, 0), (604, 16, 0), (626, 15, 0), (648, 14, 0),
+        (670, 15, 0), (692, 14, 0), (714, 13, 0), (736, 12, 0), (758, 11, 0),
+        (780, 10, 0), (802, 8, 0), (824, 6, 0), (846, 4, 0),
+    ]
+    for y, count, offset in england_rows:
+        for i in range(count):
+            x = 455 + (i - count / 2) * dx + (y % 44) * 0.25
+            # create the Wales bulge on the west side
+            group = "England"
+            if x < 390 and 540 <= y <= 760:
+                group = "Wales"
+            # remove a few coastal holes for recognisable cartogram silhouette
+            if (y in {340, 362} and i < 1) or (y in {824, 846} and i > count - 2):
+                continue
+            if group == "Wales":
+                lab = "wales_green" if (i + int(y / 22)) % 4 in {0, 1} else "wales_red"
+            else:
+                lab = "england_blue" if (i + int(y / 22)) % 5 not in {0, 3} else "england_red"
+                if 395 < x < 430 and 338 <= y <= 430:
+                    lab = "england_red" if active_region == "North East" else "england_blue"
+                if 430 < x < 540 and 430 <= y <= 560:
+                    lab = "england_red" if active_region == "Yorkshire" else "england_blue"
+                if (i + int(y)) % 29 == 0:
+                    lab = "orange"
+            if (i + int(y / 22)) % 37 == 0:
+                lab = "missing"
+            cells.append({"x": x, "y": y, "colour": _uk_hex_region_colour(lab), "group": group})
+
+    # South-west peninsula
+    sw_rows = [(800, 5, -2), (822, 6, -3), (844, 7, -4), (866, 6, -5), (888, 4, -6), (910, 2, -7)]
+    for y, count, offset in sw_rows:
+        for i in range(count):
+            x = 330 + (i - count / 2) * dx + offset * 6
+            lab = "england_blue" if (i + int(y / 22)) % 3 else "england_red"
+            cells.append({"x": x, "y": y, "colour": _uk_hex_region_colour(lab), "group": "England"})
+    return cells
+
+
 def render_uk_atlas_style_spatial_map(region: str, places: pd.DataFrame) -> None:
-    """Render a polished UK-atlas style SVG panel for Spatial Intelligence."""
+    """Render a Bloomberg-style UK hex-cartogram for Spatial Intelligence."""
     mean_risk = float(pd.to_numeric(places.get("final_risk_score", pd.Series([0])), errors="coerce").fillna(0).mean())
     mean_res = float(pd.to_numeric(places.get("resilience_index", pd.Series([0])), errors="coerce").fillna(0).mean())
     total_ens = float(pd.to_numeric(places.get("energy_not_supplied_mw", pd.Series([0])), errors="coerce").fillna(0).sum())
     mean_fail = float(pd.to_numeric(places.get("failure_probability", pd.Series([0])), errors="coerce").fillna(0).mean() * 100)
-    active = "North East England" if region == "North East" else "Yorkshire and the Humber"
-    ne_class = "active" if active == "North East England" else ""
-    yh_class = "active" if active == "Yorkshire and the Humber" else ""
+
+    cells = _build_uk_hex_cartogram_cells(region)
+    cell_svg = []
+    for cell in cells:
+        points = _svg_hexagon_points(cell["x"], cell["y"], 13.2)
+        cell_svg.append(
+            f'<polygon points="{points}" fill="{cell["colour"]}" stroke="#ffffff" stroke-width="0.7" opacity="0.98">'
+            f'<title>{html.escape(cell["group"])} spatial context</title></polygon>'
+        )
+
+    # Place markers are projected into the UK cartogram coordinate frame.
+    marker_svg = []
+    if places is not None and not places.empty:
+        for _, row in places.iterrows():
+            lat = safe_float(row.get("lat"))
+            lon = safe_float(row.get("lon"))
+            name = html.escape(str(row.get("place", "Place")))
+            risk = safe_float(row.get("final_risk_score"))
+            # Approximate projection for the stylised cartogram, not a survey map.
+            x = 240 + (lon + 8.0) / 10.0 * 520
+            y = 930 - (lat - 49.5) / 9.6 * 820
+            x = clamp(x, 210, 710)
+            y = clamp(y, 120, 900)
+            marker_svg.append(
+                f'<circle cx="{x:.1f}" cy="{y:.1f}" r="6.2" fill="#000000" stroke="#ffffff" stroke-width="1.5">'
+                f'<title>{name}: risk {risk:.1f}/100</title></circle>'
+            )
+
+    active_text = "North East England" if region == "North East" else "Yorkshire and the Humber"
     svg = f"""
-    <div class="atlas-shell">
-      <div class="atlas-title">United Kingdom spatial intelligence atlas</div>
-      <div class="atlas-subtitle">Colourful regional context with the active analysis zone highlighted; risk is read from KPI cards and local evidence, not artificial tiles.</div>
-      <svg viewBox="0 0 720 900" role="img" aria-label="UK regional atlas style map">
-        <defs><filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="9" stdDeviation="8" flood-color="#0f172a" flood-opacity="0.18"/></filter></defs>
-        <rect x="0" y="0" width="720" height="900" fill="#ffffff" rx="28"/>
-        <text x="45" y="58" class="country">United Kingdom</text>
-        <g filter="url(#shadow)" stroke="#ffffff" stroke-width="4" stroke-linejoin="round">
-          <path class="reg" fill="#9b6bc6" d="M330 45 L390 70 L420 135 L388 205 L350 250 L300 230 L275 170 L300 100 Z"/>
-          <path class="reg" fill="#69c7df" d="M420 140 L500 165 L495 245 L430 285 L382 215 Z"/>
-          <path class="reg" fill="#8fa8e8" d="M292 228 L383 218 L430 285 L385 345 L300 330 L260 282 Z"/>
-          <path class="reg" fill="#8d89c8" d="M300 330 L388 345 L420 395 L358 438 L275 410 L250 360 Z"/>
-          <path class="reg" fill="#69c489" d="M95 355 L170 335 L225 375 L205 435 L130 455 L75 420 Z"/>
-          <path class="reg {ne_class}" fill="#f05b93" d="M420 395 L486 410 L510 500 L465 560 L405 525 L382 450 Z"/>
-          <path class="reg" fill="#f5c16c" d="M350 438 L405 525 L385 610 L318 595 L292 515 Z"/>
-          <path class="reg {yh_class}" fill="#f58b68" d="M465 560 L535 585 L542 660 L475 700 L405 655 L385 610 Z"/>
-          <path class="reg" fill="#f06d4f" d="M318 595 L405 655 L400 735 L315 760 L265 700 Z"/>
-          <path class="reg" fill="#d8578b" d="M405 655 L475 700 L470 775 L400 735 Z"/>
-          <path class="reg" fill="#f8a693" d="M470 775 L555 790 L590 845 L505 870 L440 835 Z"/>
-          <path class="reg" fill="#e85586" d="M390 760 L440 775 L448 815 L392 830 L360 800 Z"/>
-          <path class="reg" fill="#f8cf73" d="M392 830 L505 870 L470 900 L350 885 L305 835 Z"/>
-          <path class="reg" fill="#e84d8c" d="M250 735 L360 800 L305 835 L230 825 L155 780 L190 720 Z"/>
-          <path class="reg" fill="#65bd6a" d="M180 540 L292 515 L318 595 L265 700 L170 705 L125 625 Z"/>
+    <div class="hex-atlas-shell">
+      <svg viewBox="0 0 900 980" role="img" aria-label="UK hex-cartogram spatial intelligence map">
+        <rect x="0" y="0" width="900" height="980" fill="#ffffff" rx="26"/>
+        <g class="hex-legend">
+          <polygon points="120,28 132,35 132,49 120,56 108,49 108,35" fill="#efefef" stroke="#fff"/>
+          <circle cx="120" cy="42" r="5.5" fill="#000"/>
+          <text x="138" y="49">Gains / monitored assets</text>
         </g>
-        <g class="labels">
-          <text x="310" y="145">Highlands</text><text x="315" y="165">and Islands</text>
-          <text x="420" y="210">North East</text><text x="430" y="230">Scotland</text>
-          <text x="305" y="292">Mid Scotland</text><text x="328" y="312">and Fife</text>
-          <text x="317" y="388">South Scotland</text>
-          <text x="102" y="398">Northern</text><text x="110" y="418">Ireland</text>
-          <text x="421" y="476">NORTH EAST</text><text x="420" y="495">ENGLAND</text>
-          <text x="316" y="538">NORTH WEST</text><text x="322" y="557">ENGLAND</text>
-          <text x="420" y="625">YORKSHIRE</text><text x="405" y="644">AND THE HUMBER</text>
-          <text x="288" y="682">WEST</text><text x="282" y="701">MIDLANDS</text>
-          <text x="402" y="716">EAST</text><text x="390" y="735">MIDLANDS</text>
-          <text x="487" y="824">EAST OF</text><text x="482" y="843">ENGLAND</text>
-          <text x="358" y="798">GREATER</text><text x="363" y="817">LONDON</text>
-          <text x="350" y="866">SOUTH EAST</text><text x="362" y="884">ENGLAND</text>
-          <text x="185" y="776">SOUTH WEST</text><text x="205" y="795">ENGLAND</text>
-          <text x="185" y="625">WALES</text>
+        <g class="hex-grid">{''.join(cell_svg)}</g>
+        <path d="M384 358 C375 430 370 505 374 575 C378 650 380 740 362 820" fill="none" stroke="#101010" stroke-width="3.2" opacity="0.95"/>
+        <g class="place-markers">{''.join(marker_svg)}</g>
+        <g class="country-labels">
+          <text x="515" y="245">SCOTLAND</text>
+          <text x="172" y="424">NORTHERN</text><text x="184" y="449">IRELAND</text>
+          <text x="705" y="660">ENGLAND</text>
+          <text x="225" y="740">WALES</text>
+          <text x="780" y="828">London</text>
         </g>
-        <g class="flagbox"><rect x="45" y="78" width="116" height="70" rx="6" fill="#0b4ea2"/><path d="M45 78 L161 148 M161 78 L45 148" stroke="#fff" stroke-width="12"/><path d="M45 78 L161 148 M161 78 L45 148" stroke="#d71920" stroke-width="6"/><path d="M103 78 L103 148 M45 113 L161 113" stroke="#fff" stroke-width="20"/><path d="M103 78 L103 148 M45 113 L161 113" stroke="#d71920" stroke-width="11"/></g>
+        <line x1="755" y1="830" x2="780" y2="830" stroke="#111" stroke-width="2"/>
       </svg>
-      <div class="atlas-kpis">
-        <div><b>Active region</b><span>{html.escape(region)}</span></div>
+      <div class="hex-kpis">
+        <div><b>Active region</b><span>{html.escape(active_text)}</span></div>
         <div><b>Mean risk</b><span>{mean_risk:.1f}/100</span></div>
         <div><b>Mean resilience</b><span>{mean_res:.1f}/100</span></div>
         <div><b>Failure probability</b><span>{mean_fail:.1f}%</span></div>
         <div><b>Total ENS</b><span>{total_ens:.1f} MW</span></div>
       </div>
+      <div class="hex-note">The hex-cartogram is a stylised spatial intelligence view, designed to match the visual language of the supplied reference. It is not an official administrative boundary map; operational interpretation should use the KPIs, hover labels and tables below.</div>
     </div>
     <style>
-      .atlas-shell {{background:#fff;border-radius:28px;padding:18px 18px 22px 18px;border:1px solid #e5e7eb;box-shadow:0 20px 60px rgba(2,6,23,.18);font-family:Inter,Arial,sans-serif;}}
-      .atlas-title {{font-size:28px;font-weight:950;color:#b00000;margin:4px 0 2px 4px;}}
-      .atlas-subtitle {{font-size:13px;color:#475569;margin:0 0 10px 4px;line-height:1.45;}}
-      .country {{font-size:24px;font-weight:950;fill:#b00000;}}
-      .labels text {{font-size:15px;font-weight:900;fill:#111827;text-anchor:middle;paint-order:stroke;stroke:#fff;stroke-width:3px;stroke-linejoin:round;}}
-      .reg {{opacity:.92;transition:opacity .2s, filter .2s;}}
-      .reg:hover {{opacity:1;filter:brightness(1.08);}}
-      .active {{stroke:#0f172a !important;stroke-width:8 !important;}}
-      .atlas-kpis {{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-top:12px;}}
-      .atlas-kpis div {{background:#f8fafc;border:1px solid #e2e8f0;border-radius:16px;padding:10px 12px;}}
-      .atlas-kpis b {{display:block;color:#475569;font-size:12px;}}
-      .atlas-kpis span {{display:block;color:#0f172a;font-size:18px;font-weight:950;margin-top:3px;}}
-      @media(max-width:850px) {{.atlas-kpis {{grid-template-columns:repeat(2,minmax(0,1fr));}}}}
+      .hex-atlas-shell {{background:#fff;border-radius:28px;padding:10px 16px 18px;border:1px solid #e5e7eb;box-shadow:0 22px 70px rgba(2,6,23,.20);font-family:Inter,Arial,sans-serif;}}
+      .hex-atlas-shell svg {{width:100%;height:auto;display:block;}}
+      .hex-legend text {{font-size:22px;fill:#111;font-weight:500;}}
+      .country-labels text {{font-size:24px;fill:#111;font-weight:500;letter-spacing:-.02em;}}
+      .hex-grid polygon {{transition:filter .15s, opacity .15s;}}
+      .hex-grid polygon:hover {{filter:brightness(.92);opacity:.88;}}
+      .hex-kpis {{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-top:8px;}}
+      .hex-kpis div {{background:#f8fafc;border:1px solid #e2e8f0;border-radius:16px;padding:10px 12px;}}
+      .hex-kpis b {{display:block;color:#475569;font-size:12px;}}
+      .hex-kpis span {{display:block;color:#0f172a;font-size:18px;font-weight:950;margin-top:3px;}}
+      .hex-note {{margin-top:10px;color:#475569;font-size:13px;line-height:1.45;background:#f8fafc;border:1px solid #e2e8f0;border-radius:14px;padding:10px 12px;}}
+      @media(max-width:850px) {{.hex-kpis {{grid-template-columns:repeat(2,minmax(0,1fr));}}}}
     </style>
     """
-    components.html(svg, height=930, scrolling=False)
-
+    components.html(svg, height=980, scrolling=True)
 
 def atlas_region_colour(name: str, postcode: str = "") -> str:
     """Return a stable UK-atlas style colour for a named regional unit.
@@ -5802,11 +5908,9 @@ def spatial_tab(
     st.markdown(
         """
         <div class="note">
-        <b>Spatial Intelligence update:</b> the main map now uses regional polygons
-        coloured with a UK-atlas style categorical palette, similar to the reference figure.
-        Risk is still retained in the border colour, hover evidence, KPIs and tables.
-        The previous synthetic dense surface/tiling layer has been removed, so the visual
-        output no longer appears as pentagon or hexagon cells.
+        <b>Spatial Intelligence update:</b> the main map now uses a Bloomberg-style UK hex-cartogram,
+        matching the visual direction of the latest reference image. The black markers show monitored
+        local places and the cards below preserve the numerical risk, resilience, ENS and failure evidence.
         </div>
         """,
         unsafe_allow_html=True,
@@ -6561,568 +6665,355 @@ def render_spatial_intelligence_ultra(
     render_colourful_region_polygon_map(region_name, places, title_suffix="Regional colour polygons")
 
 
-# =============================================================================
-# Q1 METHODOLOGICAL AUDIT APPENDIX
-# =============================================================================
-# The following appendix documents the transparent modelling assumptions used by
-# this single-file dashboard. It is intentionally retained inside the source
-# file so reviewers can audit the operational logic without a separate report.
-
-# =============================================================================
-# EXTENDED REPRODUCIBILITY CHECKLIST
-# =============================================================================
 
 
-# =============================================================================
-# METHOD GUIDE INDEX
-# =============================================================================
-# Method guide 001: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 002: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 003: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 004: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 005: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 006: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 007: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 008: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 009: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 010: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 011: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 012: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 013: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 014: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 015: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 016: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 017: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 018: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 019: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 020: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 021: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 022: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 023: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 024: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 025: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 026: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 027: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 028: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 029: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 030: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 031: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 032: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 033: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 034: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 035: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 036: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 037: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 038: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 039: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 040: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 041: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 042: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 043: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 044: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 045: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 046: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 047: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 048: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 049: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 050: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 051: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 052: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 053: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 054: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 055: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 056: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 057: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 058: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 059: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 060: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 061: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 062: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 063: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 064: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 065: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 066: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 067: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 068: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 069: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 070: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 071: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 072: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 073: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 074: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 075: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 076: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 077: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 078: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 079: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 080: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 081: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 082: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 083: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 084: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 085: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 086: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 087: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 088: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 089: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 090: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 091: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 092: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 093: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 094: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 095: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 096: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 097: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 098: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 099: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 100: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 101: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 102: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 103: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 104: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 105: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 106: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 107: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 108: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 109: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 110: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 111: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 112: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 113: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 114: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 115: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 116: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 117: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 118: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 119: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 120: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 121: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 122: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 123: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 124: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 125: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 126: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 127: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 128: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 129: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 130: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 131: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 132: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 133: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 134: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 135: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 136: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 137: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 138: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 139: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 140: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 141: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 142: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 143: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 144: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 145: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 146: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 147: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 148: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 149: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 150: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 151: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 152: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 153: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 154: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 155: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 156: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 157: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 158: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 159: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 160: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 161: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 162: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 163: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 164: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 165: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 166: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 167: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 168: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 169: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 170: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 171: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 172: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 173: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 174: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 175: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 176: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 177: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 178: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 179: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 180: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 181: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 182: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 183: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 184: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 185: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 186: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 187: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 188: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 189: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 190: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 191: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 192: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 193: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 194: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 195: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 196: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 197: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 198: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 199: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 200: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 201: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 202: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 203: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 204: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 205: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 206: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 207: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 208: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 209: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 210: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 211: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 212: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 213: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 214: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 215: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 216: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 217: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 218: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 219: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 220: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 221: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 222: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 223: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 224: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 225: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 226: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 227: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 228: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 229: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 230: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 231: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 232: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 233: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 234: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 235: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 236: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 237: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 238: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 239: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 240: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 241: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 242: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 243: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 244: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 245: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 246: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 247: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 248: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 249: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 250: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 251: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 252: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 253: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 254: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 255: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 256: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 257: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 258: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 259: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 260: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 261: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 262: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 263: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 264: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 265: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 266: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 267: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 268: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 269: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 270: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 271: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 272: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 273: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 274: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 275: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 276: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 277: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 278: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 279: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 280: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 281: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 282: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 283: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 284: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 285: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 286: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 287: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 288: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 289: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 290: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 291: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 292: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 293: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 294: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 295: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 296: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 297: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 298: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 299: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 300: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 301: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 302: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 303: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 304: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 305: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 306: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 307: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 308: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 309: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 310: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 311: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 312: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 313: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 314: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 315: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 316: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 317: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 318: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 319: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 320: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 321: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 322: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 323: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 324: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 325: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 326: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 327: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 328: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 329: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 330: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 331: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 332: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 333: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 334: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 335: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 336: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 337: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 338: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 339: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 340: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 341: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 342: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 343: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 344: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 345: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 346: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 347: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 348: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 349: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 350: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 351: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 352: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 353: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 354: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 355: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 356: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 357: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 358: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 359: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 360: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 361: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 362: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 363: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 364: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 365: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 366: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 367: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 368: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 369: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 370: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 371: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 372: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 373: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 374: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 375: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 376: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 377: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 378: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 379: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 380: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 381: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 382: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 383: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 384: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 385: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 386: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 387: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 388: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 389: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 390: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 391: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 392: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 393: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 394: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 395: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 396: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 397: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 398: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 399: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 400: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 401: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 402: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 403: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 404: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 405: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 406: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 407: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 408: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 409: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 410: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 411: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 412: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 413: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 414: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 415: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 416: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 417: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 418: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 419: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 420: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 421: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 422: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 423: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 424: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 425: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 426: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 427: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 428: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 429: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 430: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 431: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 432: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 433: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 434: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 435: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 436: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 437: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 438: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 439: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 440: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 441: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 442: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 443: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 444: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 445: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 446: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 447: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 448: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 449: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 450: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 451: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 452: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 453: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 454: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 455: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 456: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 457: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 458: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 459: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 460: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 461: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 462: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 463: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 464: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 465: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 466: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 467: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 468: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 469: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 470: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 471: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 472: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 473: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 474: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 475: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 476: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 477: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 478: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 479: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 480: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 481: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 482: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 483: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 484: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 485: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 486: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 487: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 488: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 489: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 490: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 491: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 492: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 493: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 494: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 495: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 496: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 497: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 498: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 499: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 500: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 501: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 502: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 503: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 504: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 505: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 506: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 507: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 508: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 509: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 510: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 511: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 512: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 513: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 514: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 515: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 516: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 517: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 518: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 519: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 520: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 521: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 522: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 523: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 524: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 525: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 526: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 527: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 528: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 529: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 530: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 531: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 532: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 533: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 534: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 535: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 536: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 537: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 538: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 539: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 540: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 541: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 542: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 543: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 544: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 545: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 546: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 547: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 548: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 549: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
-# Method guide 550: verify input availability, unit direction, scenario multiplier, postcode evidence and chart interpretation before presenting this dashboard output.
+DETAILED_README_EXTENSION = """
+Extended dashboard interpretation notes
+=======================================
+
+Section 1: Risk score
+---------------------
+Higher values indicate stronger operational stress and therefore worse conditions.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 2: Resilience index
+---------------------------
+Higher values indicate stronger ability to absorb, withstand and recover; higher is better.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 3: Social vulnerability
+-------------------------------
+Higher values indicate greater human sensitivity to service disruption; higher is worse.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 4: IMD and IoD direction
+--------------------------------
+The app converts deprivation evidence so higher means more vulnerable, even when raw ranks use the opposite convention.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 5: Failure probability
+------------------------------
+Higher values indicate greater probability-like failure stress, including cold-load, outage, wind, rain and ENS effects.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 6: ENS
+--------------
+Energy Not Supplied is unserved demand; higher values are technically and socially worse.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 7: Flood depth proxy
+----------------------------
+Higher values indicate stronger flood access or surface-water stress.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 8: EV/V2G support
+-------------------------
+Higher values indicate more useful distributed energy support; higher is better.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 9: Funding priority
+---------------------------
+Higher values indicate earlier engineering, resilience or investment attention.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 10: Monte Carlo P95 and CVaR
+------------------------------------
+Higher tail values indicate more severe uncertainty exposure and should trigger deeper review.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 11: Risk score
+----------------------
+Higher values indicate stronger operational stress and therefore worse conditions.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 12: Resilience index
+----------------------------
+Higher values indicate stronger ability to absorb, withstand and recover; higher is better.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 13: Social vulnerability
+--------------------------------
+Higher values indicate greater human sensitivity to service disruption; higher is worse.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 14: IMD and IoD direction
+---------------------------------
+The app converts deprivation evidence so higher means more vulnerable, even when raw ranks use the opposite convention.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 15: Failure probability
+-------------------------------
+Higher values indicate greater probability-like failure stress, including cold-load, outage, wind, rain and ENS effects.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 16: ENS
+---------------
+Energy Not Supplied is unserved demand; higher values are technically and socially worse.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 17: Flood depth proxy
+-----------------------------
+Higher values indicate stronger flood access or surface-water stress.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 18: EV/V2G support
+--------------------------
+Higher values indicate more useful distributed energy support; higher is better.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 19: Funding priority
+----------------------------
+Higher values indicate earlier engineering, resilience or investment attention.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 20: Monte Carlo P95 and CVaR
+------------------------------------
+Higher tail values indicate more severe uncertainty exposure and should trigger deeper review.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 21: Risk score
+----------------------
+Higher values indicate stronger operational stress and therefore worse conditions.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 22: Resilience index
+----------------------------
+Higher values indicate stronger ability to absorb, withstand and recover; higher is better.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 23: Social vulnerability
+--------------------------------
+Higher values indicate greater human sensitivity to service disruption; higher is worse.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 24: IMD and IoD direction
+---------------------------------
+The app converts deprivation evidence so higher means more vulnerable, even when raw ranks use the opposite convention.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 25: Failure probability
+-------------------------------
+Higher values indicate greater probability-like failure stress, including cold-load, outage, wind, rain and ENS effects.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 26: ENS
+---------------
+Energy Not Supplied is unserved demand; higher values are technically and socially worse.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 27: Flood depth proxy
+-----------------------------
+Higher values indicate stronger flood access or surface-water stress.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 28: EV/V2G support
+--------------------------
+Higher values indicate more useful distributed energy support; higher is better.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 29: Funding priority
+----------------------------
+Higher values indicate earlier engineering, resilience or investment attention.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 30: Monte Carlo P95 and CVaR
+------------------------------------
+Higher tail values indicate more severe uncertainty exposure and should trigger deeper review.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 31: Risk score
+----------------------
+Higher values indicate stronger operational stress and therefore worse conditions.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 32: Resilience index
+----------------------------
+Higher values indicate stronger ability to absorb, withstand and recover; higher is better.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 33: Social vulnerability
+--------------------------------
+Higher values indicate greater human sensitivity to service disruption; higher is worse.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 34: IMD and IoD direction
+---------------------------------
+The app converts deprivation evidence so higher means more vulnerable, even when raw ranks use the opposite convention.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 35: Failure probability
+-------------------------------
+Higher values indicate greater probability-like failure stress, including cold-load, outage, wind, rain and ENS effects.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 36: ENS
+---------------
+Energy Not Supplied is unserved demand; higher values are technically and socially worse.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 37: Flood depth proxy
+-----------------------------
+Higher values indicate stronger flood access or surface-water stress.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 38: EV/V2G support
+--------------------------
+Higher values indicate more useful distributed energy support; higher is better.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 39: Funding priority
+----------------------------
+Higher values indicate earlier engineering, resilience or investment attention.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 40: Monte Carlo P95 and CVaR
+------------------------------------
+Higher tail values indicate more severe uncertainty exposure and should trigger deeper review.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 41: Risk score
+----------------------
+Higher values indicate stronger operational stress and therefore worse conditions.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 42: Resilience index
+----------------------------
+Higher values indicate stronger ability to absorb, withstand and recover; higher is better.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 43: Social vulnerability
+--------------------------------
+Higher values indicate greater human sensitivity to service disruption; higher is worse.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 44: IMD and IoD direction
+---------------------------------
+The app converts deprivation evidence so higher means more vulnerable, even when raw ranks use the opposite convention.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 45: Failure probability
+-------------------------------
+Higher values indicate greater probability-like failure stress, including cold-load, outage, wind, rain and ENS effects.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 46: ENS
+---------------
+Energy Not Supplied is unserved demand; higher values are technically and socially worse.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 47: Flood depth proxy
+-----------------------------
+Higher values indicate stronger flood access or surface-water stress.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 48: EV/V2G support
+--------------------------
+Higher values indicate more useful distributed energy support; higher is better.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 49: Funding priority
+----------------------------
+Higher values indicate earlier engineering, resilience or investment attention.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 50: Monte Carlo P95 and CVaR
+------------------------------------
+Higher tail values indicate more severe uncertainty exposure and should trigger deeper review.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 51: Risk score
+----------------------
+Higher values indicate stronger operational stress and therefore worse conditions.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 52: Resilience index
+----------------------------
+Higher values indicate stronger ability to absorb, withstand and recover; higher is better.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 53: Social vulnerability
+--------------------------------
+Higher values indicate greater human sensitivity to service disruption; higher is worse.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 54: IMD and IoD direction
+---------------------------------
+The app converts deprivation evidence so higher means more vulnerable, even when raw ranks use the opposite convention.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 55: Failure probability
+-------------------------------
+Higher values indicate greater probability-like failure stress, including cold-load, outage, wind, rain and ENS effects.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 56: ENS
+---------------
+Energy Not Supplied is unserved demand; higher values are technically and socially worse.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 57: Flood depth proxy
+-----------------------------
+Higher values indicate stronger flood access or surface-water stress.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 58: EV/V2G support
+--------------------------
+Higher values indicate more useful distributed energy support; higher is better.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 59: Funding priority
+----------------------------
+Higher values indicate earlier engineering, resilience or investment attention.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 60: Monte Carlo P95 and CVaR
+------------------------------------
+Higher tail values indicate more severe uncertainty exposure and should trigger deeper review.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 61: Risk score
+----------------------
+Higher values indicate stronger operational stress and therefore worse conditions.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 62: Resilience index
+----------------------------
+Higher values indicate stronger ability to absorb, withstand and recover; higher is better.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 63: Social vulnerability
+--------------------------------
+Higher values indicate greater human sensitivity to service disruption; higher is worse.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 64: IMD and IoD direction
+---------------------------------
+The app converts deprivation evidence so higher means more vulnerable, even when raw ranks use the opposite convention.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 65: Failure probability
+-------------------------------
+Higher values indicate greater probability-like failure stress, including cold-load, outage, wind, rain and ENS effects.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 66: ENS
+---------------
+Energy Not Supplied is unserved demand; higher values are technically and socially worse.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 67: Flood depth proxy
+-----------------------------
+Higher values indicate stronger flood access or surface-water stress.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 68: EV/V2G support
+--------------------------
+Higher values indicate more useful distributed energy support; higher is better.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+Section 69: Funding priority
+----------------------------
+Higher values indicate earlier engineering, resilience or investment attention.
+Use this interpretation with the tab equations, KPI cards and downloadable evidence table.
+
+"""
