@@ -4584,6 +4584,7 @@ def _voronoi_sub_regions(
 
     If only one place or Voronoi fails, returns the full district as one region.
     """
+    import numpy as _np  # always available — NOT inside try so except can use it
     try:
         from scipy.spatial import Voronoi
         from shapely.geometry import Polygon, LineString, MultiPolygon
@@ -4674,29 +4675,28 @@ def _voronoi_sub_regions(
                     "centroid": [geom.centroid.x, geom.centroid.y],
                 })
 
+        _cx = float(_np.mean([c[0] for c in district_coords]))
+        _cy = float(_np.mean([c[1] for c in district_coords]))
         return output if output else [{
-            "name": place_points[0]["name"],
-            "risk": place_points[0]["risk"],
-            "lons": [c[0] for c in district_coords],
-            "lats": [c[1] for c in district_coords],
-            "centroid": [
-                float(np.mean([c[0] for c in district_coords])),
-                float(np.mean([c[1] for c in district_coords])),
-            ],
+            "name":     place_points[0]["name"],
+            "risk":     place_points[0]["risk"],
+            "lons":     [c[0] for c in district_coords],
+            "lats":     [c[1] for c in district_coords],
+            "centroid": [_cx, _cy],
         }]
 
     except Exception:
         # Fallback: single polygon with mean risk
-        mean_risk = float(np.mean([p["risk"] for p in place_points]))
+        # _np is defined BEFORE the try block so it is always in scope here
+        _mean_risk = float(_np.mean([p["risk"] for p in place_points]))
+        _cx = float(_np.mean([c[0] for c in district_coords]))
+        _cy = float(_np.mean([c[1] for c in district_coords]))
         return [{
             "name":     place_points[0]["name"],
-            "risk":     mean_risk,
+            "risk":     _mean_risk,
             "lons":     [c[0] for c in district_coords],
             "lats":     [c[1] for c in district_coords],
-            "centroid": [
-                float(np.mean([c[0] for c in district_coords])),
-                float(np.mean([c[1] for c in district_coords])),
-            ],
+            "centroid": [_cx, _cy],
         }]
 
 
